@@ -53,6 +53,12 @@ python ood_news_agent.py
 - `ood_report_log.md`: 今回「新規」「更新」として報告した項目が実行日時ごとに追記される
   (フォーマットの詳細は [docs/ood_report_log_format.md](docs/ood_report_log_format.md) 参照)
 
+## プロンプトのカスタマイズ
+
+Agentへの指示文・ユーザー入力プロンプトは `templates/` 配下のJinja2テンプレート
+(`instructions.j2`, `user_input.j2`)に分離されています。コードを変更せずに
+文言を調整したい場合はこれらのファイルを編集してください。
+
 ## 注意事項
 
 - `WebSearchTool` を利用するため、Web検索機能が有効な `OPENAI_API_KEY` が必要です。

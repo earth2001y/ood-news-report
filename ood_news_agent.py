@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 
 try:
@@ -39,6 +40,8 @@ from agents import Agent, Runner, WebSearchTool
 
 DEFAULT_WINDOW_DAYS = 30
 
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+
 CATEGORIES = [
     "新バージョンのリリース情報",
     "開発ロードマップの更新・公開",
@@ -46,22 +49,27 @@ CATEGORIES = [
     "コミュニティイベント",
 ]
 
-REFERENCE_SOURCES = """
-1. 新バージョンのリリース情報
-   - https://github.com/OSC/ondemand/releases
-   - https://github.com/OSC/ondemand/blob/master/CHANGELOG.md
-   - https://discourse.openondemand.org/c/announcements/46
-2. 開発ロードマップの更新・公開
-   - https://discourse.openondemand.org/c/feature-requests-and-roadmap-discussion/48
-3. セキュリティ脆弱性情報
-   - https://github.com/OSC/ondemand/security/advisories
-   - NVD (https://nvd.nist.gov/)
-   - OSV.dev (https://osv.dev/)
-4. コミュニティイベントの告知・CFP・開催報告
-   - https://www.openondemand.org/ (トップページのイベント欄)
-   - Discourse Announcements (https://discourse.openondemand.org/c/announcements/46)
-   - GOOD Conference 公式サイト
-""".strip()
+_jinja_env = Environment(
+    loader=FileSystemLoader(TEMPLATES_DIR),
+    keep_trailing_newline=True,
+)
+
+
+def render_template(name: str, **context: object) -> str:
+    """`templates/` ディレクトリのJinja2テンプレートをレンダリングする。
+
+    Agentへの指示文やユーザー入力プロンプトをPythonコード中にf文字列で
+    ハードコードすると、文言調整のたびにコード変更が必要になりレビューも
+    しづらいため、テンプレートファイルに分離している。
+
+    Args:
+        name: `templates/` ディレクトリ内のテンプレートファイル名。
+        **context: テンプレートに渡す変数。
+
+    Returns:
+        レンダリング済みの文字列。
+    """
+    return _jinja_env.get_template(name).render(**context)
 
 
 class ReportItem(BaseModel):
@@ -105,44 +113,7 @@ def build_agent(model: str) -> Agent:
     Returns:
         調査・報告用に指示文とツールを設定済みのAgentインスタンス。
     """
-    instructions = f"""あなたは Open OnDemand (OSC/ondemand) に関する最新情報を調査し、
-日本語で報告するリサーチエージェントです。
-
-【調査対象カテゴリと参照先例】
-{REFERENCE_SOURCES}
-
-【調査範囲】
-- ユーザーメッセージで与えられる「調査対象期間」内に公開・更新された情報のみを対象とする。
-- 各カテゴリについて web_search ツールを使い、複数のクエリ
-  (例: site:github.com/OSC/ondemand releases, site:discourse.openondemand.org roadmap,
-  Open OnDemand CVE, Open OnDemand conference 2026 等)で調査すること。
-- 参照先例のURL・サイトは出発点であり、他に関連する信頼できる情報源が見つかればそれも使ってよい。
-
-【既報告項目との照合】
-- ユーザーメッセージで、前回までの報告済み項目一覧(ログ)が渡される。ログが空の場合は初回実行である。
-- 今回見つけた情報をログの既報告項目と照合し、以下のルールで分類する。
-  - ログに存在しない完全に新規の情報 → status="新規"
-  - ログの既報告項目と同一だが、内容に進展・変更がある場合
-    (例: パッチバージョンの追加、CVEの深刻度・影響範囲の更新、イベント日程や会場の変更、
-    ロードマップ項目の進捗変化など) → status="更新"。
-    change_note に何がどう変わったかを具体的に明記する。
-  - ログの既報告項目と全く変化がない場合 → 報告対象外(log_entries に含めない。再報告しない)
-- 該当する新規・更新情報が全く見つからないカテゴリは、report_markdown 内でそのカテゴリを
-  「変更なし」と明記する(見出しは残すが内容は「変更なし」のみ)。
-
-【出力形式(report_markdown)】
-- 日本語。
-- カテゴリごとに簡潔にまとめる。見出しは最小限(カテゴリ名のみを見出しとする程度)にし、箇条書き中心。
-- 各項目に「新規」または「更新」のラベルを明記する。
-- 各項目に情報源のURLを添える。
-- 前置きや後書きの冗長な説明は不要。簡潔に。
-
-【出力形式(log_entries)】
-- 今回「新規」または「更新」として報告した項目のみを構造化データとして返す
-  (変更なしの項目は含めない)。
-- これは呼び出し元プログラムがログファイルに追記するために使う。
-  report_markdown の内容と整合させること。
-"""
+    instructions = render_template("instructions.j2")
     return Agent(
         name="OOD News Reporter",
         instructions=instructions,
@@ -291,16 +262,13 @@ def main() -> int:
 
     agent = build_agent(model=args.model)
 
-    user_input = f"""本日日付: {today.isoformat()}
-調査対象期間: {window_start.isoformat()} 〜 {today.isoformat()} (直近{window_days}日間)
-
---- 前回までの報告済み項目ログ (ood_report_log.md の内容) ---
-{existing_log}
---- ログ終わり ---
-
-上記の調査対象期間について、指示された4カテゴリを調査し、ログと照合した上で
-OODReport 形式で出力してください。
-"""
+    user_input = render_template(
+        "user_input.j2",
+        today=today.isoformat(),
+        window_start=window_start.isoformat(),
+        window_days=window_days,
+        existing_log=existing_log,
+    )
 
     period = f"{window_start.isoformat()} 〜 {today.isoformat()}"
     print(f"Open OnDemand の最新情報を調査中... (対象期間: {period})", file=sys.stderr)
