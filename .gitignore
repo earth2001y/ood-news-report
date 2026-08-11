@@ -217,5 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Agent実行ログ(実行環境ごとにローカルで蓄積するため追跡しない)
+# Agent実行ログ・レポート出力(実行環境ごとにローカルで蓄積するため追跡しない)
 ood_report_log.md
+/output/

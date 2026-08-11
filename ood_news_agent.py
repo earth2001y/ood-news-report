@@ -3,14 +3,15 @@
 
 OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を行う。
 実行するたびに、作業ディレクトリの ood_report_log.md と今回の調査結果を
-突き合わせ、新規・更新のみを報告し、ログに追記する。
+突き合わせ、新規・更新のみを報告し、ログに追記する。レポート本文は標準出力に
+加えて、$OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。
 
 使い方:
     export OPENAI_API_KEY=sk-...
     python ood_news_agent.py
 
-    # ログファイルの場所やモデルを変える場合
-    python ood_news_agent.py --log-path ./ood_report_log.md --model gpt-5.4
+    # ログファイルの場所やモデル、レポート出力先を変える場合
+    python ood_news_agent.py --log-path ./ood_report_log.md --model gpt-5.4 --outdir ./output
 """
 
 from __future__ import annotations
@@ -211,6 +212,27 @@ def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> N
             f.write(header + text)
 
 
+def write_report_file(outdir: Path, run_at: datetime, report_markdown: str) -> Path:
+    """レポート本文を `report_<実行日時>.md` としてファイルに保存する。
+
+    標準出力だけでは実行環境によっては後から結果を追えないため、
+    実行ごとに一意なファイル名(分単位のタイムスタンプ入り)で保存し、
+    過去のレポートを上書きせず蓄積できるようにする。
+
+    Args:
+        outdir: 出力先ディレクトリ。存在しない場合は作成する。
+        run_at: 実行日時。ファイル名(YYYYMMDD_HHMM)に使う。
+        report_markdown: 保存するレポート本文(Markdown)。
+
+    Returns:
+        書き込んだファイルのパス。
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+    report_path = outdir / f"report_{run_at.strftime('%Y%m%d_%H%M')}.md"
+    report_path.write_text(report_markdown, encoding="utf-8")
+    return report_path
+
+
 def main() -> int:
     """CLIエントリポイント。ログ読み込み→調査実行→レポート表示→ログ追記を行う。
 
@@ -235,6 +257,11 @@ def main() -> int:
         "--model",
         default=os.environ.get("OOD_AGENT_MODEL", "gpt-5.4"),
         help="使用するモデル (既定: gpt-5.4。WebSearchTool対応モデルを指定すること)",
+    )
+    parser.add_argument(
+        "--outdir",
+        default=os.environ.get("OUTDIR", "output"),
+        help="レポートファイルの出力先ディレクトリ (既定: 環境変数 OUTDIR、未設定なら ./output)",
     )
     parser.add_argument("--max-turns", type=int, default=40)
     args = parser.parse_args()
@@ -275,10 +302,12 @@ OODReport 形式で出力してください。
     report: OODReport = result.final_output
 
     append_log(log_path, run_at, report.log_entries)
+    report_path = write_report_file(Path(args.outdir), run_at, report.report_markdown)
 
     print(report.report_markdown)
     print(
-        f"\n(ログファイル {log_path} に {len(report.log_entries)} 件を追記しました)",
+        f"\n(ログファイル {log_path} に {len(report.log_entries)} 件を追記しました)"
+        f"\n(レポートを {report_path} に保存しました)",
         file=sys.stderr,
     )
     return 0

@@ -42,11 +42,15 @@ python ood_news_agent.py
 | --- | --- | --- |
 | `--log-path` | `ood_report_log.md` | 報告済み項目ログのパス |
 | `--model` | `gpt-5.4` | 使用するモデル(WebSearchTool対応のResponses APIモデル) |
+| `--outdir` | 環境変数 `OUTDIR`、未設定なら `output` | レポートファイルの出力先ディレクトリ |
 | `--max-turns` | `40` | Agent実行の最大ターン数 |
 
 ## 出力
 
 - 標準出力: 日本語・カテゴリ別・箇条書き中心のレポート(新規/更新ラベル、参照URL付き)
+- `$OUTDIR/report_YYYYMMDD_HHMM.md`: 標準出力と同じレポート本文を実行ごとに
+  ファイルとしても保存する(ディレクトリが存在しない場合は自動作成)
+  (フォーマットの詳細は [docs/report_file_format.md](docs/report_file_format.md) 参照)
 - `ood_report_log.md`: 今回「新規」「更新」として報告した項目が実行日時ごとに追記される
   (フォーマットの詳細は [docs/ood_report_log_format.md](docs/ood_report_log_format.md) 参照)
 
