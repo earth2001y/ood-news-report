@@ -12,6 +12,9 @@ OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を�
 
     # ログファイルの場所やモデル、レポート出力先を変える場合
     python ood_news_agent.py --log-path ./ood_report_log.md --model gpt-5.4 --outdir ./output
+
+    # 調査対象期間(日数)を変える場合
+    python ood_news_agent.py --window-days 30
 """
 
 from __future__ import annotations
@@ -34,8 +37,7 @@ except ImportError:
 
 from agents import Agent, Runner, WebSearchTool
 
-DEFAULT_WINDOW_DAYS = 14
-FIRST_RUN_WINDOW_DAYS = 60
+DEFAULT_WINDOW_DAYS = 30
 
 CATEGORIES = [
     "新バージョンのリリース情報",
@@ -241,8 +243,8 @@ def main() -> int:
     処理であり、途中の値(run_at, log_path, report)を複数の下位関数に分けて
     渡すよりも直線的な処理として読めた方が全体の流れを把握しやすいため。
     ファイルI/OやAgent構築など再利用性のある処理は個別関数に分離してある。
-    ログファイルが存在しない初回実行時は、直近14日間では過去の蓄積情報を
-    取り漏らすため、調査対象期間を直近60日間に広げる。
+    調査対象期間は初回実行かどうかにかかわらず既定で30日固定とし、
+    `--window-days`(または環境変数 WINDOW_DAYS)を指定した場合のみ上書きする。
 
     Returns:
         プロセス終了コード。正常終了は0、APIキー未設定時は1。
@@ -263,6 +265,12 @@ def main() -> int:
         default=os.environ.get("OUTDIR", "output"),
         help="レポートファイルの出力先ディレクトリ (既定: 環境変数 OUTDIR、未設定なら ./output)",
     )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=os.environ.get("WINDOW_DAYS"),
+        help=f"調査対象期間(日数) (既定: 環境変数 WINDOW_DAYS、未設定なら{DEFAULT_WINDOW_DAYS}日)",
+    )
     parser.add_argument("--max-turns", type=int, default=40)
     args = parser.parse_args()
 
@@ -277,8 +285,7 @@ def main() -> int:
     log_path = Path(args.log_path)
     run_at = datetime.now()
     today = run_at.date()
-    is_first_run = not log_path.exists()
-    window_days = FIRST_RUN_WINDOW_DAYS if is_first_run else DEFAULT_WINDOW_DAYS
+    window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
     window_start = today - timedelta(days=window_days)
     existing_log = load_log(log_path)
 
