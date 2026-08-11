@@ -1,0 +1,22 @@
+{
+    //"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python3",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+
+    "[python]": {
+        // PythonファイルのFormatterとして ruff を使う設定
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",         // 自動修正
+            "source.organizeImports.ruff": "explicit" // import文のソート
+        },
+    },
+
+    "ruff.enable": true,   // ruff を有効にする
+    "ruff.path": [
+        ".venv/bin/ruff"
+    ],
+
+    "flake8.enabled": false,
+}

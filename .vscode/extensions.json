@@ -1,0 +1,8 @@
+{
+    // 推奨する拡張機能
+    "recommendations": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff"
+    ]
+}
