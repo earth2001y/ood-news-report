@@ -47,7 +47,8 @@ python ood_news_agent.py
 ## 出力
 
 - 標準出力: 日本語・カテゴリ別・箇条書き中心のレポート(新規/更新ラベル、参照URL付き)
-- `ood_report_log.md`: 今回「新規」「更新」として報告した項目が実行日付ごとに追記される
+- `ood_report_log.md`: 今回「新規」「更新」として報告した項目が実行日時ごとに追記される
+  (フォーマットの詳細は [docs/ood_report_log_format.md](docs/ood_report_log_format.md) 参照)
 
 ## 注意事項
 

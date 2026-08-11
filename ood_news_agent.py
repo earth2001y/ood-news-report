@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -169,7 +169,7 @@ def load_log(log_path: Path) -> str:
     return "(ログファイルが存在しません。今回が初回実行です)"
 
 
-def append_log(log_path: Path, today: date, entries: list[ReportItem]) -> None:
+def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> None:
     """今回「新規」「更新」と判定された項目をログファイルに追記する。
 
     LLMの出力(entries)を検証・整形しつつファイル書き込みを行う処理を
@@ -177,10 +177,12 @@ def append_log(log_path: Path, today: date, entries: list[ReportItem]) -> None:
     (LLMにファイル操作ツールを直接与えると、書式崩れや二重書き込みの
     リスクがあるため避けている)。entriesが空(変更なし)の場合は、
     ログを不必要に肥大化させないよう何も書き込まない。
+    見出しに時刻(HH:MM)まで含めるのは、同じ日に複数回実行した場合でも
+    docs/ood_report_log_format.md の仕様どおり実行分を区別できるようにするため。
 
     Args:
         log_path: ood_report_log.md のパス。
-        today: 実行日。追記セクションの見出しに使う。
+        run_at: 実行日時。追記セクションの見出し(YYYY-MM-DD HH:MM)に使う。
         entries: 今回「新規」または「更新」として報告した項目のリスト。
 
     Returns:
@@ -188,7 +190,7 @@ def append_log(log_path: Path, today: date, entries: list[ReportItem]) -> None:
     """
     if not entries:
         return
-    lines = [f"\n## {today.isoformat()} 実行分\n"]
+    lines = [f"\n## {run_at.strftime('%Y-%m-%d %H:%M')} 実行分\n"]
     for cat in CATEGORIES:
         cat_entries = [e for e in entries if e.category == cat]
         if not cat_entries:
@@ -246,7 +248,8 @@ def main() -> int:
         return 1
 
     log_path = Path(args.log_path)
-    today = date.today()
+    run_at = datetime.now()
+    today = run_at.date()
     is_first_run = not log_path.exists()
     window_days = FIRST_RUN_WINDOW_DAYS if is_first_run else DEFAULT_WINDOW_DAYS
     window_start = today - timedelta(days=window_days)
@@ -271,7 +274,7 @@ OODReport 形式で出力してください。
     result = Runner.run_sync(agent, input=user_input, max_turns=args.max_turns)
     report: OODReport = result.final_output
 
-    append_log(log_path, today, report.log_entries)
+    append_log(log_path, run_at, report.log_entries)
 
     print(report.report_markdown)
     print(
