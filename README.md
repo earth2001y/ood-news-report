@@ -26,7 +26,8 @@ pip install -r requirements.txt
 export OPENAI_API_KEY=sk-...
 ```
 
-`OPENAI_API_KEY` は `.env` ファイルに記載しても読み込まれます。
+`OPENAI_API_KEY` は `.env` ファイルに記載しても読み込まれます
+(`.env.example` をコピーして使ってください)。
 
 ## 実行方法
 
