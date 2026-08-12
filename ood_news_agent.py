@@ -52,9 +52,9 @@ _jinja_env = Environment(
 def render_template(name: str, **context: object) -> str:
     """`templates/` ディレクトリのJinja2テンプレートをレンダリングする。
 
-    Agentへの指示文やユーザー入力プロンプトをPythonコード中にf文字列でハードコードすると、
-    文言調整のたびにコード変更が必要になりレビューもしづらいため、
-    テンプレートファイルに分離している。
+    [実装理由] Agentへの指示文やユーザー入力プロンプトをPythonコード中にf文字列でハードコードする
+    と、文言調整のたびにコード変更が必要になりレビューもしづらいため、テンプレートファイルに分離して
+    いる。
 
     Args:
         name: `templates/` ディレクトリ内のテンプレートファイル名。
@@ -96,7 +96,7 @@ class OODReport(BaseModel):
 def build_agent(model: str) -> Agent:
     """Open OnDemand調査用のAgentを構築する。
 
-    WebSearchToolによるWeb検索と、構造化出力(OODReport)を組み合わせたAgentを生成する。
+    [実装理由] WebSearchToolによるWeb検索と、構造化出力(OODReport)を組み合わせたAgentを生成する。
     レポート本文(report_markdown)とログ追記用データ(log_entries)を出力スキーマ上で分離しているのは、
     ログファイルへの書き込みをLLMの自由記述に委ねず、
     呼び出し側(append_log)で確定的に行えるようにするため。
@@ -120,7 +120,7 @@ def build_agent(model: str) -> Agent:
 def load_log(log_path: Path) -> str:
     """報告済み項目ログをテキストとして読み込む。
 
-    ログ本文をそのままAgentへの入力に埋め込み、
+    [実装理由] ログ本文をそのままAgentへの入力に埋め込み、
     既報告項目との照合をLLM側のテキスト理解に任せる設計のため、構造化パースはせず生テキストを返す。
     ファイルが存在しない/空の場合も呼び出し側でエラーにせず処理を継続できるよう、
     その旨を示す文言を返す。
@@ -140,12 +140,11 @@ def load_log(log_path: Path) -> str:
 def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> None:
     """今回「新規」「更新」と判定された項目をログファイルに追記する。
 
-    LLMの出力(entries)を検証・整形しつつファイル書き込みを行う処理をPython側に置くことで、
-    書き込み内容と形式を確定的に保証する(LLMにファイル操作ツールを直接与えると、
-    書式崩れや二重書き込みのリスクがあるため避けている)。entriesが空(変更なし)の場合は、
-    ログを不必要に肥大化させないよう何も書き込まない。見出しに時刻(HH:MM)まで含めるのは、
-    同じ日に複数回実行した場合でもdocs/ood_report_log_format.md の仕様どおり実行分を区別できるように
-    するため。
+    [実装理由] LLMの出力(entries)を整形しつつファイル書き込みを行う処理をPython側に置くことで、書き
+    込み内容と形式を確定的に保証する(LLMにファイル操作ツールを直接与えると、書式崩れや二重書き込みの
+    リスクがあるため避けている)。entriesが空(変更なし)の場合は、ログを不必要に肥大化させないよう何も
+    書き込まない。見出しに時刻(HH:MM)まで含めるのは、同じ日に複数回実行した場合でも
+    docs/ood_report_log_format.md の仕様どおり実行分を区別できるようにするため。
 
     Args:
         log_path: ood_report_log.md のパス。
@@ -181,7 +180,7 @@ def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> N
 def write_report_file(outdir: Path, run_at: datetime, report_markdown: str) -> Path:
     """レポート本文を `report_<実行日時>.md` としてファイルに保存する。
 
-    標準出力だけでは実行環境によっては後から結果を追えないため、
+    [実装理由] 標準出力だけでは実行環境によっては後から結果を追えないため、
     実行ごとに一意なファイル名(分単位のタイムスタンプ入り)で保存し、
     過去のレポートを上書きせず蓄積できるようにする。
 
@@ -200,14 +199,14 @@ def write_report_file(outdir: Path, run_at: datetime, report_markdown: str) -> P
 
 
 def main() -> int:
-    """CLIエントリポイント。ログ読み込み→調査実行→レポート表示→ログ追記を行う。
+    """CLIエントリポイント。調査を実行し、ログ追記・レポート保存・結果表示までを行う。
 
-    引数解析・APIキー確認・調査期間の算出・Agent実行・ログ追記・レポート保存までを1関数にまとめてい
-    るのは、これらが「1回の実行」というひとまとまりの処理であり、途中の値(run_at, log_path, report)
-    を複数の下位関数に分けて渡すよりも直線的な処理として読めた方が全体の流れを把握しやすいため。
-    ファイルI/OやAgent構築など再利用性のある処理は個別関数に分離してある。
-    調査対象期間は初回実行かどうかにかかわらず既定で30日固定とし、
-    `--window-days`(または環境変数 WINDOW_DAYS)を指定した場合のみ上書きする。
+    [実装理由] 引数解析からAgent実行・ログ追記・レポート保存までを1関数にまとめているのは、これらが
+    「1回の実行」というひとまとまりの処理であり、run_at・log_path・report のような途中の値を下位関数
+    間で受け渡すよりも、直線的な処理として読める方が全体の流れを把握しやすいためである。ファイルI/O
+    やAgent構築など再利用性のある処理は個別関数に分離し、mainはその呼び出し順序の制御に専念する。ま
+    た、調査対象期間は初回実行かどうかにかかわらず既定で30日固定とし、`--window-days`(または環境変数
+    WINDOW_DAYS)を指定した場合のみ上書きするという挙動も、この関数内の設計判断として含まれる。
 
     Returns:
         プロセス終了コード。正常終了は0、APIキー未設定時は1。
