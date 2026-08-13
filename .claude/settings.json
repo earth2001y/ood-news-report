@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(make help)",
+      "Bash(make check)",
+      "Bash(make format)",
+      "Bash(make test)",
+      "Bash(.venv/bin/ruff check:*)",
+      "Bash(.venv/bin/ruff format:*)",
+      "Bash(.venv/bin/python3 -m pytest:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./ood_report_log.md)",
+      "Read(./output/**)"
+    ]
+  }
+}

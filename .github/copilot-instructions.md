@@ -1,0 +1,38 @@
+# GitHub Copilot instructions
+
+**完全な開発ガイドは [AGENTS.md](../AGENTS.md) を実体とする。** Copilot は参照先を
+自動で読み込まないため、このファイルには Copilot が守るべき規約のみを抜粋して
+再掲している。規約を変更するときは `AGENTS.md` と本ファイルの両方を更新する。
+
+プロジェクトの概要と使い方は [README.md](../README.md) を参照。
+
+## 実行・検証の基本
+
+- Python 3.12 以上を使用する
+- 仮想環境は `.venv/` を使い、システム Python ではなく `.venv/bin/python3` と `.venv/bin/ruff` を使う
+- 変更後は `make check` と `make test` を実行する
+- 自動整形が必要な場合は `make format` を使う
+- Web 検索を使う機能には `OPENAI_API_KEY` が必要
+
+## 実装ルール
+
+- Python コードは PEP 8 に準拠する
+- Ruff の設定に従い、行長は 100 文字までとする
+- `print()` でのエラー出力は避け、`logger.error(...)` を使う
+- すべての公開関数には、機能説明と実装理由を記した Google スタイルの docstring を付ける
+- 実装理由は `[実装理由]` で始める
+- モジュール docstring を各 Python ファイルの先頭に置く
+- `for` / `if` / `try` のネストは 3 段以内に保つ
+- 関数の本体は 80 行以内に収める
+
+## 作業方針
+
+- 変更は必要最小限に留める
+- 既存の命名規約と構成に合わせる
+- 追加や修正を行うときは、対応するテストを必要に応じて作成する
+- 失敗している検証がある場合は、その原因を確認してから修正する
+
+## ドキュメント
+
+- ログやレポートの形式は `docs/` 配下を参照する
+- コミットメッセージの規約は [.agents/skills/git-commits/SKILL.md](../.agents/skills/git-commits/SKILL.md) に定義されている

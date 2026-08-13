@@ -1,0 +1,7 @@
+# Codex project-scoped configuration.
+# This layer is loaded only after the repository is marked as trusted.
+
+# Keep file changes inside the repository unless the user approves an escalation.
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
