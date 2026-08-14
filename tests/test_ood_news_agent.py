@@ -562,7 +562,7 @@ class TestMain:
         assert ood.main() == 0
         assert "ログレベル 'VERBOSE' は不正です" in capsys.readouterr().err
 
-    def test_missing_api_key_returns_error(self, monkeypatch, capsys):
+    def test_missing_api_key_returns_error(self, monkeypatch, capsys, caplog):
         # 対象: main
         # パターン: OPENAI_API_KEY未設定時、終了コード1とERRORログを返す
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
