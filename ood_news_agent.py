@@ -21,6 +21,10 @@ $OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは
     # 調査対象期間(日数)を変える場合
     python ood_news_agent.py --window-days 30
 
+    # 調査対象期間の基準日を指定する場合(既定は実行日)
+    python ood_news_agent.py --base-date 2026-07-31
+    BASE_DATE=2026-07-31 python ood_news_agent.py
+
     # 進捗を表示する場合(既定のログレベルは WARNING)
     python ood_news_agent.py --log-level INFO
     OOD_LOG_LEVEL=INFO python ood_news_agent.py
@@ -31,7 +35,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -46,6 +50,8 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_DAYS = 30
+
+BASE_DATE_FORMAT = "%Y-%m-%d"
 
 DEFAULT_LOG_LEVEL = "WARNING"
 
@@ -96,6 +102,37 @@ def setup_logging(level_name: str | None) -> int:
             ", ".join(LOG_LEVELS),
         )
     return logging.getLevelNamesMapping()[resolved]
+
+
+def resolve_base_date(base_date: str | None, run_at: datetime) -> date:
+    """調査対象期間の基準日を決定する。
+
+    [実装理由] 基準日を実行日から切り離せるようにしているのは、過去のある時点を基準にした調査を
+    後から再現したり、実行が数日遅れた分をさかのぼって調査したりする必要があるためである。未指定時に
+    実行日を使うのは、日常的な運用では「今日までの直近N日間」が求められる挙動だからである。
+    不正な書式をログレベル(setup_logging)のように警告して続行させず例外にしているのは、基準日の
+    誤りが調査対象期間そのものをずらし、誤った期間のレポートを正常な結果として出力してしまうためで
+    ある。実行日時(run_at)を引数で受け取るのは、この関数が現在時刻を直接読まないようにして、
+    テストから基準日の解決だけを検証できるようにするためである。
+
+    Args:
+        base_date: 基準日の文字列(YYYY-MM-DD)。Noneの場合は実行日を使う。
+        run_at: 実行日時。base_dateがNoneのときの基準日として使う。
+
+    Returns:
+        調査対象期間の終端となる基準日。
+
+    Raises:
+        ValueError: base_dateがYYYY-MM-DD形式として解釈できない場合。
+    """
+    if base_date is None:
+        return run_at.date()
+    try:
+        return datetime.strptime(base_date, BASE_DATE_FORMAT).date()
+    except ValueError as e:
+        raise ValueError(
+            f"基準日 {base_date!r} を解釈できません。YYYY-MM-DD 形式で指定してください。"
+        ) from e
 
 
 def render_template(name: str, **context: object) -> str:
@@ -199,7 +236,7 @@ def build_writer_agent(model: str) -> Agent:
 def compose_article(
     writer: Agent,
     report: OODReport,
-    today: str,
+    base_date: str,
     window_start: str,
     window_days: int,
     max_turns: int,
@@ -215,7 +252,7 @@ def compose_article(
     Args:
         writer: build_writer_agentで構築した執筆担当Agent。
         report: 調査担当Agentの構造化出力。
-        today: 本日日付(YYYY-MM-DD)。
+        base_date: 調査対象期間の基準日(YYYY-MM-DD)。期間の終端にあたる。
         window_start: 調査対象期間の開始日(YYYY-MM-DD)。
         window_days: 調査対象期間の日数。
         max_turns: Agent実行の最大ターン数。
@@ -225,7 +262,7 @@ def compose_article(
     """
     writer_input = render_template(
         "writer_input.j2",
-        today=today,
+        base_date=base_date,
         window_start=window_start,
         window_days=window_days,
         entries=report.log_entries,
@@ -357,6 +394,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"調査対象期間(日数) (既定: 環境変数 WINDOW_DAYS、未設定なら{DEFAULT_WINDOW_DAYS}日)",
     )
     parser.add_argument(
+        "--base-date",
+        default=os.environ.get("BASE_DATE"),
+        help=(
+            "調査対象期間の基準日(YYYY-MM-DD)。この日を終端とし、--window-days 日前までを"
+            "対象とする (既定: 環境変数 BASE_DATE、未設定なら実行日)"
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default=os.environ.get("OOD_LOG_LEVEL"),
         help=(
@@ -426,9 +471,13 @@ def main() -> int:
     運用上のエラーであり、スタックトレースではなく対処方法を示すべきものだからである。進捗と完了
     報告をINFOで出しているのは、既定のWARNINGでは記事本文とエラーだけが残り、パイプで他のコマンドへ
     渡す用途を妨げないようにするためである(記事本文のみ標準出力、ログは標準エラー出力に出す)。
+    調査対象期間の基準日(base_date)とファイル名・ログ見出しに使う実行日時(run_at)を別の値として
+    保持しているのは、`--base-date` で過去を基準に調査したときも「いつ実行した分か」の記録は実行
+    日時のままにしておくべきであり、同じ基準日で複数回実行してもレポートファイルが衝突しないように
+    するためである。
 
     Returns:
-        プロセス終了コード。正常終了は0、APIキー未設定時およびAPI呼び出し失敗時は1。
+        プロセス終了コード。正常終了は0、APIキー未設定時・基準日の書式不正時・API呼び出し失敗時は1。
     """
     args = build_parser().parse_args()
 
@@ -443,22 +492,26 @@ def main() -> int:
 
     log_path = Path(args.log_path)
     run_at = datetime.now()
-    today = run_at.date()
+    try:
+        base_date = resolve_base_date(args.base_date, run_at)
+    except ValueError as e:
+        logger.error("%s", e)
+        return 1
     window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
-    window_start = today - timedelta(days=window_days)
+    window_start = base_date - timedelta(days=window_days)
     existing_log = load_log(log_path)
 
     researcher = build_researcher_agent(model=args.model)
 
     user_input = render_template(
         "user_input.j2",
-        today=today.isoformat(),
+        base_date=base_date.isoformat(),
         window_start=window_start.isoformat(),
         window_days=window_days,
         existing_log=existing_log,
     )
 
-    period = f"{window_start.isoformat()} 〜 {today.isoformat()}"
+    period = f"{window_start.isoformat()} 〜 {base_date.isoformat()}"
     logger.info("Open OnDemand の最新情報を調査中... (対象期間: %s)", period)
 
     try:
@@ -476,7 +529,7 @@ def main() -> int:
         article_markdown = compose_article(
             writer,
             report,
-            today=today.isoformat(),
+            base_date=base_date.isoformat(),
             window_start=window_start.isoformat(),
             window_days=window_days,
             max_turns=args.max_turns,

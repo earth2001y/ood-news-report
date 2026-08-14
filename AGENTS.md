@@ -31,6 +31,8 @@ CLI エージェント。
   - `ReportItem` / `OODReport` / `OODArticle`: 構造化出力スキーマ。
   - `setup_logging`: ログレベルを解決して設定する（`--log-level` / 環境変数
     `OOD_LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。
+  - `resolve_base_date`: 調査対象期間の基準日を決定する（`--base-date` / 環境変数
+    `BASE_DATE`、未指定なら実行日）。書式不正は `ValueError` にする。
   - `render_template`: `templates/` の Jinja2 テンプレートをレンダリングする。
   - `build_researcher_agent`: WebSearchTool と出力スキーマを設定した調査担当 Agent を
     構築する。

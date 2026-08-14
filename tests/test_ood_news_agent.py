@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from typing import get_args
 
 import httpx
@@ -16,9 +16,10 @@ from ood_news_agent import OODArticle, OODReport, ReportItem
 
 
 @pytest.fixture(autouse=True)
-def _default_log_level(monkeypatch):
-    """実行環境の OOD_LOG_LEVEL がテスト結果に影響しないよう、既定値の状態に揃える。"""
-    monkeypatch.delenv("OOD_LOG_LEVEL", raising=False)
+def _clear_optional_env(monkeypatch):
+    """実行環境の任意設定がテスト結果に影響しないよう、未設定(既定値)の状態に揃える。"""
+    for name in ("OOD_LOG_LEVEL", "BASE_DATE", "WINDOW_DAYS"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _make_entry(**overrides):
@@ -131,6 +132,36 @@ class TestSetupLogging:
         assert "進捗メッセージ" in capsys.readouterr().err
 
 
+class TestResolveBaseDate:
+    def test_none_uses_run_date(self):
+        # 対象: resolve_base_date
+        # パターン: 未指定の場合、実行日時の日付部分を基準日とする
+        run_at = datetime(2026, 8, 14, 9, 57)
+        assert ood.resolve_base_date(None, run_at) == date(2026, 8, 14)
+
+    def test_explicit_date_overrides_run_date(self):
+        # 対象: resolve_base_date
+        # パターン: 指定した日付が実行日より優先される
+        run_at = datetime(2026, 8, 14, 9, 57)
+        assert ood.resolve_base_date("2026-07-31", run_at) == date(2026, 7, 31)
+
+    @pytest.mark.parametrize(
+        "given",
+        ["2026/07/31", "20260731", "2026-13-01", "2026-07-32", "昨日", "", "2026-07"],
+    )
+    def test_invalid_format_raises_value_error(self, given):
+        # 対象: resolve_base_date
+        # パターン: YYYY-MM-DD として解釈できない値はValueErrorになる
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            ood.resolve_base_date(given, datetime(2026, 8, 14, 9, 57))
+
+    def test_future_date_is_accepted(self):
+        # 対象: resolve_base_date
+        # パターン: 未来日でも拒否しない(先の期間を指定する用途を妨げない)
+        run_at = datetime(2026, 8, 14, 9, 57)
+        assert ood.resolve_base_date("2026-12-31", run_at) == date(2026, 12, 31)
+
+
 class TestReportItemCategory:
     def test_literal_matches_categories(self):
         # 対象: ReportItem.category
@@ -179,7 +210,7 @@ class TestRenderTemplate:
         # パターン: 各項目のフィールドと調査担当Agentの報告文が本文に埋め込まれる
         rendered = ood.render_template(
             "writer_input.j2",
-            today="2026-08-13",
+            base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
             entries=[_make_entry(status="更新", change_note="深刻度がCriticalに変更")],
@@ -196,7 +227,7 @@ class TestRenderTemplate:
         # パターン: entriesが空の場合、新規・更新なしを示す文言が入る
         rendered = ood.render_template(
             "writer_input.j2",
-            today="2026-08-13",
+            base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
             entries=[],
@@ -209,7 +240,7 @@ class TestRenderTemplate:
         # パターン: item_dateが空文字の場合、日付が不明であることを明示する
         rendered = ood.render_template(
             "writer_input.j2",
-            today="2026-08-13",
+            base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
             entries=[_make_entry(item_date="")],
@@ -219,18 +250,31 @@ class TestRenderTemplate:
 
     def test_user_input_embeds_context_variables(self):
         # 対象: render_template("user_input.j2")
-        # パターン: today/window_start/window_days/existing_logが本文に埋め込まれる
+        # パターン: base_date/window_start/window_days/existing_logが本文に埋め込まれる
         rendered = ood.render_template(
             "user_input.j2",
-            today="2026-08-13",
+            base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
             existing_log="(まだ記録はありません。今回が初回実行です)",
         )
-        assert "2026-08-13" in rendered
-        assert "2026-07-14" in rendered
-        assert "30" in rendered
+        assert "調査の基準日: 2026-08-13" in rendered
+        assert "2026-07-14 〜 2026-08-13" in rendered
+        assert "30日間" in rendered
         assert "(まだ記録はありません。今回が初回実行です)" in rendered
+
+    def test_user_input_excludes_items_after_base_date(self):
+        # 対象: render_template("user_input.j2")
+        # パターン: 基準日より後の情報を対象外とする指示が含まれる
+        rendered = ood.render_template(
+            "user_input.j2",
+            base_date="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            existing_log="(初回実行)",
+        )
+        assert "基準日より後に公開・更新された情報" in rendered
+        assert "報告に含めない" in rendered
 
 
 class TestLoadLog:
@@ -363,7 +407,7 @@ class TestComposeArticle:
         article = ood.compose_article(
             object(),
             report,
-            today="2026-08-13",
+            base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
             max_turns=12,
@@ -390,7 +434,7 @@ class TestComposeArticle:
         ood.compose_article(
             object(),
             report,
-            today="2026-08-13",
+            base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
             max_turns=12,
@@ -420,6 +464,8 @@ class TestParseArguments:
                 "custom-output",
                 "--window-days",
                 "7",
+                "--base-date",
+                "2026-07-31",
                 "--max-turns",
                 "12",
             ],
@@ -432,7 +478,29 @@ class TestParseArguments:
         assert args.writer_model == "gpt-writer"
         assert args.outdir == "custom-output"
         assert args.window_days == 7
+        assert args.base_date == "2026-07-31"
         assert args.max_turns == 12
+
+    def test_base_date_defaults_to_none(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: --base-date未指定かつ環境変数なしの場合、None(=実行日扱い)になる
+        monkeypatch.delenv("BASE_DATE", raising=False)
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        assert ood.build_parser().parse_args().base_date is None
+
+    def test_base_date_reads_environment_variable(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 環境変数 BASE_DATE が既定値として使われる
+        monkeypatch.setenv("BASE_DATE", "2026-07-01")
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        assert ood.build_parser().parse_args().base_date == "2026-07-01"
+
+    def test_cli_base_date_overrides_environment_variable(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 環境変数より --base-date の指定が優先される
+        monkeypatch.setenv("BASE_DATE", "2026-07-01")
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--base-date", "2026-07-31"])
+        assert ood.build_parser().parse_args().base_date == "2026-07-31"
 
     def test_writer_model_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
@@ -498,6 +566,112 @@ class TestDescribeApiError:
 
 
 class TestMain:
+    def test_base_date_defines_investigation_window(self, tmp_path, monkeypatch, capsys):
+        # 対象: main
+        # パターン: --base-date指定時、その日を終端とする期間が調査担当Agentに渡る
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        captured_input = {}
+
+        empty_report = OODReport(report_markdown="本文", log_entries=[])
+
+        def _run_sync(agent, input, max_turns):
+            captured_input.setdefault("text", input)
+            return type("_R", (), {"final_output": empty_report})
+
+        monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
+        monkeypatch.setattr(ood, "build_writer_agent", lambda model: object())
+        monkeypatch.setattr(ood.Runner, "run_sync", _run_sync)
+        monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: "# 記事本文")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+                "--base-date",
+                "2026-07-31",
+                "--window-days",
+                "10",
+                "--log-level",
+                "INFO",
+            ],
+        )
+
+        assert ood.main() == 0
+
+        # 基準日を終端に、window-days 日前が開始日になる
+        assert "調査の基準日: 2026-07-31" in captured_input["text"]
+        assert "2026-07-21 〜 2026-07-31" in captured_input["text"]
+        assert "2026-07-21 〜 2026-07-31" in capsys.readouterr().err
+
+    def test_base_date_does_not_change_report_filename(self, tmp_path, monkeypatch):
+        # 対象: main
+        # パターン: 基準日を過去にしても、ファイル名とログ見出しは実行日時のまま
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        log_path = tmp_path / "log.md"
+        outdir = tmp_path / "output"
+        fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
+        _stub_agents(monkeypatch, fake_report, "# 記事本文")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(log_path),
+                "--outdir",
+                str(outdir),
+                "--base-date",
+                "2020-01-01",
+            ],
+        )
+
+        assert ood.main() == 0
+
+        today = datetime.now().strftime("%Y%m%d")
+        report_files = [p.name for p in outdir.glob("report_*.md")]
+        assert len(report_files) == 1
+        assert report_files[0].startswith(f"report_{today}_")
+        # ログ見出しも基準日(2020-01-01)ではなく実行日
+        assert "2020-01-01" not in log_path.read_text(encoding="utf-8")
+
+    def test_invalid_base_date_returns_error_without_calling_api(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # 対象: main
+        # パターン: 基準日の書式が不正な場合、Agentを実行せず終了コード1とERRORログを返す
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        log_path = tmp_path / "log.md"
+        outdir = tmp_path / "output"
+
+        def _must_not_run(agent, input, max_turns):
+            raise AssertionError("基準日が不正なのにAgentが実行された")
+
+        monkeypatch.setattr(ood.Runner, "run_sync", _must_not_run)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(log_path),
+                "--outdir",
+                str(outdir),
+                "--base-date",
+                "2026/07/31",
+            ],
+        )
+
+        assert ood.main() == 1
+        err = capsys.readouterr().err
+        assert "YYYY-MM-DD" in err
+        assert "'2026/07/31'" in err
+        assert not log_path.exists()
+        assert not outdir.exists()
+
     def test_progress_is_hidden_at_default_level(self, tmp_path, monkeypatch, capsys):
         # 対象: main
         # パターン: 既定のWARNINGでは、標準出力は記事のみで進捗ログが出ない
