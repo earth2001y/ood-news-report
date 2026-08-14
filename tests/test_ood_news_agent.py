@@ -64,8 +64,10 @@ def _stub_agents(monkeypatch, report, article_markdown):
         models["researcher"] = model
         return _Sentinel("researcher")
 
-    def _build_writer_agent(model):
+    def _build_writer_agent(model, categories=None):
         models["writer"] = model
+        if categories is not None:
+            models["writer_categories"] = categories
         return _Sentinel("writer")
 
     def _run_sync(agent, input, max_turns):
@@ -205,6 +207,16 @@ class TestRenderTemplate:
         assert "角括弧ラベルは使わない" in rendered
         assert "補足情報獲得のためのWeb検索はしてよい" in rendered
         assert "事実の追加・推測・脚色は一切しない" in rendered
+
+    def test_writer_instructions_lists_only_target_categories(self):
+        # 対象: render_template("writer_instructions.j2")
+        # パターン: 執筆対象として渡したカテゴリだけが指示文に含まれる
+        target = [ood.CATEGORIES[0], ood.CATEGORIES[3]]
+        rendered = ood.render_template("writer_instructions.j2", categories=target)
+        assert "1. 新バージョンのリリース情報" in rendered
+        assert "2. コミュニティイベント" in rendered
+        assert "開発ロードマップの更新・公開" not in rendered
+        assert "セキュリティ脆弱性情報" not in rendered
 
     def test_writer_input_embeds_entries_and_report(self):
         # 対象: render_template("writer_input.j2")
@@ -609,7 +621,7 @@ class TestMain:
             return type("_R", (), {"final_output": empty_report})
 
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
-        monkeypatch.setattr(ood, "build_writer_agent", lambda model: object())
+        monkeypatch.setattr(ood, "build_writer_agent", lambda model, categories=None: object())
         monkeypatch.setattr(ood.Runner, "run_sync", _run_sync)
         monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: "# 記事本文")
         monkeypatch.setattr(
@@ -827,7 +839,7 @@ class TestMain:
         outdir = tmp_path / "output"
         fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
-        monkeypatch.setattr(ood, "build_writer_agent", lambda model: object())
+        monkeypatch.setattr(ood, "build_writer_agent", lambda model, categories=None: object())
         monkeypatch.setattr(
             ood.Runner,
             "run_sync",
@@ -898,7 +910,11 @@ class TestMain:
         )
 
         assert ood.main() == 0
-        assert models == {"researcher": "gpt-test", "writer": "gpt-test"}
+        assert models == {
+            "researcher": "gpt-test",
+            "writer": "gpt-test",
+            "writer_categories": [ood.CATEGORIES[0]],
+        }
 
     def test_writer_model_overrides_model(self, tmp_path, monkeypatch):
         # 対象: main
@@ -923,7 +939,11 @@ class TestMain:
         )
 
         assert ood.main() == 0
-        assert models == {"researcher": "gpt-test", "writer": "gpt-writer"}
+        assert models == {
+            "researcher": "gpt-test",
+            "writer": "gpt-writer",
+            "writer_categories": [ood.CATEGORIES[0]],
+        }
 
     def test_no_log_entries_does_not_create_log_file(self, tmp_path, monkeypatch):
         # 対象: main

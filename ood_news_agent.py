@@ -210,7 +210,7 @@ def build_researcher_agent(model: str) -> Agent:
     )
 
 
-def build_writer_agent(model: str) -> Agent:
+def build_writer_agent(model: str, categories: list[str] | None = None) -> Agent:
     """調査結果をニュースレター記事へ再構成するAgentを構築する。
 
     [実装理由] 調査担当Agentの出力は箇条書き中心の報告文であり、読み物としての流れを欠く。
@@ -221,11 +221,13 @@ def build_writer_agent(model: str) -> Agent:
 
     Args:
         model: 使用するモデル名。WebSearchTool(Responses API)対応モデルを指定する。
+        categories: 記事に含めるカテゴリ。省略時は全カテゴリを対象にする。
 
     Returns:
         記事執筆用に指示文と出力スキーマを設定済みのAgentインスタンス。
     """
-    instructions = render_template("writer_instructions.j2", categories=CATEGORIES)
+    target_categories = categories if categories is not None else CATEGORIES
+    instructions = render_template("writer_instructions.j2", categories=target_categories)
     return Agent(
         name="OOD News Writer",
         instructions=instructions,
@@ -533,7 +535,15 @@ def main() -> int:
         return 0
 
     logger.info("調査結果をニュースレター記事に再構成中...")
-    writer = build_writer_agent(model=args.writer_model or args.model)
+    target_categories = [
+        category
+        for category in CATEGORIES
+        if any(entry.category == category for entry in report.log_entries)
+    ]
+    writer = build_writer_agent(
+        model=args.writer_model or args.model,
+        categories=target_categories,
+    )
     try:
         article_markdown = compose_article(
             writer,
