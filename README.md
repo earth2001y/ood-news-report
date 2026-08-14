@@ -64,6 +64,7 @@ python ood_news_agent.py
 | `--window-days` | 環境変数 `WINDOW_DAYS`、未設定なら `30` | 調査対象期間(日数) |
 | `--base-date` | 環境変数 `BASE_DATE`、未設定なら実行日 | 調査対象期間の基準日(`YYYY-MM-DD`)。この日を終端とする |
 | `--log-level` | 環境変数 `OOD_LOG_LEVEL`、未設定なら `WARNING` | ログの出力レベル(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`) |
+| `--dry-run` | 無効 | APIによる調査・記事再構成を行うが、ログ追記・レポート保存・Slack投稿は行わない |
 | `--max-turns` | `40` | Agent実行の最大ターン数 |
 
 ### 調査対象期間
@@ -110,6 +111,16 @@ OOD_LOG_LEVEL=INFO python ood_news_agent.py
 
 ```bash
 python ood_news_agent.py --log-level INFO 2>/dev/null > report.md
+```
+
+### ドライラン
+
+`--dry-run` を指定すると、通常どおりOpenAI APIを呼び出して調査と記事再構成を行いますが、
+`ood_report_log.md` への追記、レポートファイルの保存、Slackへの投稿は行いません。再構成した記事は
+標準出力に表示されるため、保存前に内容を確認する用途に使えます。
+
+```bash
+python ood_news_agent.py --dry-run
 ```
 
 ## 出力

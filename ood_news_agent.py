@@ -28,6 +28,9 @@ $OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは
     # 進捗を表示する場合(既定のログレベルは WARNING)
     python ood_news_agent.py --log-level INFO
     OOD_LOG_LEVEL=INFO python ood_news_agent.py
+
+    # APIで調査・記事再構成を行い、結果を標準出力にだけ表示する場合
+    python ood_news_agent.py --dry-run
 """
 
 from __future__ import annotations
@@ -476,6 +479,11 @@ def build_parser() -> argparse.ArgumentParser:
             f"(既定: 環境変数 OOD_LOG_LEVEL、未設定なら {DEFAULT_LOG_LEVEL})"
         ),
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="APIによる調査・記事再構成は行い、ログ追記・レポート保存・Slack投稿は行わない",
+    )
     parser.add_argument("--max-turns", type=int, default=40)
     return parser
 
@@ -524,7 +532,7 @@ def describe_api_error(error: APIError) -> str:
 
 
 def main() -> int:
-    """CLIエントリポイント。調査・記事再構成を実行し、ログ追記・レポート保存・結果表示までを行う。
+    """CLIエントリポイント。調査・記事再構成を実行し、必要に応じて結果を永続化する。
 
     [実装理由] 引数解析からAgent実行・ログ追記・レポート保存までを1関数にまとめているのは、これらが
     「1回の実行」というひとまとまりの処理であり、run_at・log_path・report のような途中の値を下位関数
@@ -588,7 +596,8 @@ def main() -> int:
         return 1
     report: OODReport = result.final_output
 
-    append_log(log_path, run_at, report.log_entries)
+    if not args.dry_run:
+        append_log(log_path, run_at, report.log_entries)
 
     if not report.log_entries:
         logger.info("新しい情報がないため、ニュースレター記事は作成しません")
@@ -623,18 +632,22 @@ def main() -> int:
         )
         return 1
 
-    report_path = write_report_file(Path(args.outdir), run_at, article_markdown)
+    if not args.dry_run:
+        report_path = write_report_file(Path(args.outdir), run_at, article_markdown)
 
-    slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
-    if slack_webhook_url:
-        logger.info("レポートをSlackへ投稿中...")
-        try:
-            post_to_slack(slack_webhook_url, article_markdown)
-        except (HTTPError, URLError, RuntimeError, TimeoutError) as e:
-            logger.error("Slackへの投稿に失敗しました: %s", e)
-            return 1
+        slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+        if slack_webhook_url:
+            logger.info("レポートをSlackへ投稿中...")
+            try:
+                post_to_slack(slack_webhook_url, article_markdown)
+            except (HTTPError, URLError, RuntimeError, TimeoutError) as e:
+                logger.error("Slackへの投稿に失敗しました: %s", e)
+                return 1
 
     print(article_markdown)
+    if args.dry_run:
+        logger.info("ドライランのため、ログ追記・レポート保存・Slack投稿を行いません")
+        return 0
     logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.log_entries))
     logger.info("レポートを %s に保存しました", report_path)
     return 0

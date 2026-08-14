@@ -643,6 +643,12 @@ class TestParseArguments:
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--log-level", "ERROR"])
         assert ood.build_parser().parse_args().log_level == "ERROR"
 
+    def test_dry_run_is_enabled_by_option(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: --dry-runを指定するとドライランが有効になる
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--dry-run"])
+        assert ood.build_parser().parse_args().dry_run is True
+
 
 class TestDescribeApiError:
     @pytest.mark.parametrize(
@@ -679,6 +685,46 @@ class TestDescribeApiError:
 
 
 class TestMain:
+    def test_dry_run_outputs_article_without_writing_or_posting(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # 対象: main
+        # パターン: ドライランでも調査・記事再構成を実行し、記事は標準出力だけに出す
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
+        log_path = tmp_path / "log.md"
+        outdir = tmp_path / "output"
+        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        models = _stub_agents(monkeypatch, fake_report, "# 記事本文")
+        monkeypatch.setattr(
+            ood,
+            "post_to_slack",
+            lambda *args: (_ for _ in ()).throw(AssertionError("Slack投稿が実行された")),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--dry-run",
+                "--log-path",
+                str(log_path),
+                "--outdir",
+                str(outdir),
+            ],
+        )
+
+        assert ood.main() == 0
+
+        assert models == {
+            "researcher": "gpt-5.4",
+            "writer": "gpt-5.4",
+            "writer_categories": [ood.CATEGORIES[0]],
+        }
+        assert capsys.readouterr().out.strip() == "# 記事本文"
+        assert not log_path.exists()
+        assert not outdir.exists()
+
     def test_posts_article_to_configured_slack_webhook(self, tmp_path, monkeypatch):
         # 対象: main
         # パターン: Slack Webhook URL指定時、保存した記事本文を投稿する
