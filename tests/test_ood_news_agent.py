@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from datetime import date, datetime
@@ -18,7 +19,7 @@ from ood_news_agent import OODArticle, OODReport, ReportItem
 @pytest.fixture(autouse=True)
 def _clear_optional_env(monkeypatch):
     """実行環境の任意設定がテスト結果に影響しないよう、未設定(既定値)の状態に揃える。"""
-    for name in ("OOD_LOG_LEVEL", "BASE_DATE", "WINDOW_DAYS"):
+    for name in ("OOD_LOG_LEVEL", "BASE_DATE", "WINDOW_DAYS", "SLACK_WEBHOOK_URL"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -385,6 +386,65 @@ class TestWriteReportFile:
         assert report_path.read_text(encoding="utf-8") == "2回目"
 
 
+class TestPostToSlack:
+    def test_converts_markdown_to_slack_mrkdwn(self):
+        # 対象: markdown_to_slack_mrkdwn
+        # パターン: 見出し・リンク・強調・コード・箇条書きをSlack記法へ変換する
+        markdown = (
+            "# 見出し\n\n**重要**です。`設定値`を確認します。\n- 項目 ([出典](https://example.com))"
+        )
+
+        assert ood.markdown_to_slack_mrkdwn(markdown) == (
+            "*見出し*\n\n*重要*です。 `設定値` を確認します。\n• 項目 (<https://example.com|出典>)"
+        )
+
+    def test_posts_article_as_json_text(self, monkeypatch):
+        # 対象: post_to_slack
+        # パターン: 記事本文をJSONのtextとしてPOSTする
+        captured = {}
+
+        class _Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        def _urlopen(request, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return _Response()
+
+        monkeypatch.setattr(ood, "urlopen", _urlopen)
+
+        ood.post_to_slack("https://hooks.slack.com/services/test", "# 記事本文")
+
+        request = captured["request"]
+        assert request.method == "POST"
+        assert request.get_header("Content-type") == "application/json"
+        assert json.loads(request.data) == {"text": "*記事本文*"}
+        assert captured["timeout"] == ood.SLACK_TIMEOUT_SECONDS
+
+    def test_raises_when_slack_returns_non_success_status(self, monkeypatch):
+        # 対象: post_to_slack
+        # パターン: Slackが成功以外のHTTPステータスを返した場合、RuntimeErrorになる
+        class _Response:
+            status = 202
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        monkeypatch.setattr(ood, "urlopen", lambda request, timeout: _Response())
+
+        with pytest.raises(RuntimeError, match="HTTP 202"):
+            ood.post_to_slack("https://hooks.slack.com/services/test", "記事本文")
+
+
 class TestBuildResearcherAgent:
     def test_sets_model_instructions_and_output_type(self):
         # 対象: build_researcher_agent
@@ -551,6 +611,17 @@ class TestParseArguments:
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
         assert ood.build_parser().parse_args().writer_model is None
 
+    def test_slack_webhook_url_is_not_a_cli_argument(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: Slack Webhook URLをコマンド引数で指定すると受け付けない
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ood_news_agent.py", "--slack-webhook-url", "https://hooks.slack.com/services/test"],
+        )
+        with pytest.raises(SystemExit):
+            ood.build_parser().parse_args()
+
     def test_log_level_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --log-level未指定かつ環境変数なしの場合、None(=既定値扱い)になる
@@ -608,6 +679,39 @@ class TestDescribeApiError:
 
 
 class TestMain:
+    def test_posts_article_to_configured_slack_webhook(self, tmp_path, monkeypatch):
+        # 対象: main
+        # パターン: Slack Webhook URL指定時、保存した記事本文を投稿する
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
+        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        _stub_agents(monkeypatch, fake_report, "# 記事本文")
+        captured = {}
+
+        def _post_to_slack(webhook_url, article_markdown):
+            captured["webhook_url"] = webhook_url
+            captured["article_markdown"] = article_markdown
+
+        monkeypatch.setattr(ood, "post_to_slack", _post_to_slack)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+            ],
+        )
+
+        assert ood.main() == 0
+
+        assert captured == {
+            "webhook_url": "https://hooks.slack.com/services/test",
+            "article_markdown": "# 記事本文",
+        }
+
     def test_base_date_defines_investigation_window(self, tmp_path, monkeypatch, capsys):
         # 対象: main
         # パターン: --base-date指定時、その日を終端とする期間が調査担当Agentに渡る

@@ -33,11 +33,15 @@ $OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from agents import Agent, Runner, WebSearchTool
 from dotenv import load_dotenv
@@ -50,6 +54,8 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_DAYS = 30
+
+SLACK_TIMEOUT_SECONDS = 10
 
 BASE_DATE_FORMAT = "%Y-%m-%d"
 
@@ -361,6 +367,60 @@ def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> 
     return report_path
 
 
+def post_to_slack(webhook_url: str, article_markdown: str) -> None:
+    """記事本文をSlack Incoming Webhookへ投稿する。
+
+    [実装理由] Slack公式SDKを追加せず標準ライブラリでWebhookへ送信することで、CLIの依存関係を
+    増やさず、既存のレポート生成処理から独立した単純な通知機能にしている。Slackは通常のMarkdown
+    ではなくmrkdwnを解釈するため、送信前に記事をSlack向けの記法へ変換し、見出しや出典リンクを
+    Slack上でも読みやすく表示する。
+
+    Args:
+        webhook_url: Slack Incoming WebhookのURL。
+        article_markdown: Slackへ投稿する記事本文。
+
+    Raises:
+        HTTPError: Slack WebhookがHTTPエラーを返した場合。
+        URLError: Slack Webhookへ接続できない場合。
+    """
+    slack_text = markdown_to_slack_mrkdwn(article_markdown)
+    payload = json.dumps({"text": slack_text}, ensure_ascii=False).encode("utf-8")
+    request = Request(
+        webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=SLACK_TIMEOUT_SECONDS) as response:
+        if response.status != 200:
+            raise RuntimeError(f"Slack WebhookがHTTP {response.status}を返しました")
+
+
+def markdown_to_slack_mrkdwn(markdown: str) -> str:
+    """記事MarkdownをSlackのmrkdwn形式へ変換する。
+
+    [実装理由] Slack Incoming Webhookは通常のMarkdownをレンダリングせず、独自のmrkdwn記法を使う。
+    MarkdownリンクをSlackリンクへ変換し、見出しと箇条書きもSlackで意味が伝わる表現へ置き換える一方、
+    URL以外の入力値はそのまま保持して記事の内容を変えないようにしている。
+
+    Args:
+        markdown: 変換前の記事Markdown。
+
+    Returns:
+        Slack mrkdwn形式の記事本文。
+    """
+    lines = []
+    for line in markdown.splitlines():
+        line = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", line)
+        line = re.sub(r"^\s*[-*]\s+", "• ", line)
+        line = re.sub(r"\[([^]]+)\]\(([^)]+)\)", r"<\2|\1>", line)
+        line = re.sub(r"(?<!\s)`([^`\n]+)`", r" `\1`", line)
+        line = re.sub(r"`([^`\n]+)`(?!\s)", r"`\1` ", line)
+        line = re.sub(r"\*\*([^*]+)\*\*", r"*\1*", line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """CLI引数を定義したArgumentParserを構築する。
 
@@ -564,6 +624,15 @@ def main() -> int:
         return 1
 
     report_path = write_report_file(Path(args.outdir), run_at, article_markdown)
+
+    slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+    if slack_webhook_url:
+        logger.info("レポートをSlackへ投稿中...")
+        try:
+            post_to_slack(slack_webhook_url, article_markdown)
+        except (HTTPError, URLError, RuntimeError, TimeoutError) as e:
+            logger.error("Slackへの投稿に失敗しました: %s", e)
+            return 1
 
     print(article_markdown)
     logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.log_entries))

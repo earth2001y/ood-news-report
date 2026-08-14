@@ -40,6 +40,8 @@ python3 -m venv .venv   # 未作成の場合
 source .venv/bin/activate
 pip install -r requirements.txt
 export OPENAI_API_KEY=sk-...
+# Slack Incoming Webhookへ投稿する場合
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ```
 
 `OPENAI_API_KEY` は `.env` ファイルに記載しても読み込まれます
@@ -124,6 +126,10 @@ python ood_news_agent.py --log-level INFO 2>/dev/null > report.md
 新規・更新項目がない場合は、執筆担当Agentを実行せず、標準出力・レポートファイルへの
 出力も行いません。ログへの追記もありません。
 
+`SLACK_WEBHOOK_URL` を設定すると、レポートファイル保存後に
+記事本文をSlackのmrkdwn形式へ変換してIncoming Webhookへ投稿します。未設定の場合はSlack投稿を
+行いません。
+
 ## エラー時の挙動
 
 OpenAI API の呼び出しが失敗した場合、スタックトレースではなく原因と対処方法を
@@ -145,6 +151,9 @@ OpenAI API の呼び出しが失敗した場合、スタックトレースでは
 この状態で再実行すると、追記済みの項目は「変更なし」と判定されて再報告されない
 点に注意してください。同じ内容を記事にしたい場合は、ログから該当セクションを
 削除してから再実行します。
+
+Slack投稿に失敗した場合は終了コード1を返します。ローカルのログとレポートファイルは
+投稿前に保存されるため、記事本文は失われません。
 
 ## プロンプトのカスタマイズ
 
