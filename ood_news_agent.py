@@ -306,7 +306,15 @@ def load_log(log_path: Path) -> str:
     return "(ログファイルが存在しません。今回が初回実行です)"
 
 
-def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> None:
+def append_log(
+    log_path: Path,
+    run_at: datetime,
+    entries: list[ReportItem],
+    *,
+    window_start: str | None = None,
+    base_date: str | None = None,
+    window_days: int | None = None,
+) -> None:
     """今回「新規」「更新」と判定された項目をログファイルに追記する。
 
     [実装理由] LLMの出力(entries)を整形しつつファイル書き込みを行う処理をPython側に置くことで、書き
@@ -314,11 +322,15 @@ def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> N
     リスクがあるため避けている)。entriesが空(変更なし)の場合は、ログを不必要に肥大化させないよう何も
     書き込まない。見出しに時刻(HH:MM)まで含めるのは、同じ日に複数回実行した場合でも
     docs/ood_report_log_format.md の仕様どおり実行分を区別できるようにするため。
+    ログの実行セクションには調査対象期間も残し、どの期間の調査結果か後から追跡しやすくしている。
 
     Args:
         log_path: ood_report_log.md のパス。
         run_at: 実行日時。追記セクションの見出し(YYYY-MM-DD HH:MM)に使う。
         entries: 今回「新規」または「更新」として報告した項目のリスト。
+        window_start: 調査期間の開始日(YYYY-MM-DD)。Noneの場合は記録しない。
+        base_date: 調査期間の終端日(YYYY-MM-DD)。Noneの場合は記録しない。
+        window_days: 調査期間の日数。Noneの場合は記録しない。
 
     Returns:
         None
@@ -326,6 +338,8 @@ def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> N
     if not entries:
         return
     lines = [f"\n## {run_at.strftime('%Y-%m-%d %H:%M')} 実行分\n"]
+    if window_start is not None and base_date is not None and window_days is not None:
+        lines.append(f"対象期間: {window_start} 〜 {base_date} ({window_days}日間)\n\n")
     for cat in CATEGORIES:
         cat_entries = [e for e in entries if e.category == cat]
         if not cat_entries:
@@ -597,7 +611,14 @@ def main() -> int:
     report: OODReport = result.final_output
 
     if not args.dry_run:
-        append_log(log_path, run_at, report.log_entries)
+        append_log(
+            log_path,
+            run_at,
+            report.log_entries,
+            window_start=window_start.isoformat(),
+            base_date=base_date.isoformat(),
+            window_days=window_days,
+        )
 
     if not report.log_entries:
         logger.info("新しい情報がないため、ニュースレター記事は作成しません")

@@ -221,7 +221,7 @@ class TestRenderTemplate:
 
     def test_writer_input_embeds_entries_and_report(self):
         # 対象: render_template("writer_input.j2")
-        # パターン: 各項目のフィールドと調査担当Agentの報告文が本文に埋め込まれる
+        # パターン: 調査レポート本文には期間表記を入れず、各項目と報告文のみが埋め込まれる
         rendered = ood.render_template(
             "writer_input.j2",
             base_date="2026-08-13",
@@ -230,7 +230,8 @@ class TestRenderTemplate:
             entries=[_make_entry(status="更新", change_note="深刻度がCriticalに変更")],
             report_markdown="## 新バージョンのリリース情報\n\n- [更新] v3.1.0",
         )
-        assert "2026-07-14 〜 2026-08-13" in rendered
+        assert "調査対象期間:" not in rendered
+        assert "2026-07-14 〜 2026-08-13" not in rendered
         assert "v3.1.0" in rendered
         assert "https://example.com/v3.1.0" in rendered
         assert "深刻度がCriticalに変更" in rendered
@@ -323,12 +324,20 @@ class TestAppendLog:
 
     def test_creates_file_with_header_when_absent(self, tmp_path):
         # 対象: append_log
-        # パターン: ログファイルが存在しない場合、見出し付きで新規作成する
+        # パターン: ログファイルが存在しない場合、見出し付きで新規作成し、対象期間を記録する
         log_path = tmp_path / "ood_report_log.md"
-        ood.append_log(log_path, datetime(2026, 8, 13, 9, 30), [_make_entry()])
+        ood.append_log(
+            log_path,
+            datetime(2026, 8, 13, 9, 30),
+            [_make_entry()],
+            window_start="2026-07-14",
+            base_date="2026-08-13",
+            window_days=30,
+        )
         text = log_path.read_text(encoding="utf-8")
         assert text.startswith("# Open OnDemand 情報収集 報告ログ\n")
         assert "## 2026-08-13 09:30 実行分" in text
+        assert "対象期間: 2026-07-14 〜 2026-08-13 (30日間)" in text
         assert "### 新バージョンのリリース情報" in text
         assert (
             "- [新規] v3.1.0 (2026-08-01) - 新機能が追加された - https://example.com/v3.1.0" in text
@@ -336,12 +345,20 @@ class TestAppendLog:
 
     def test_appends_without_duplicating_header(self, tmp_path):
         # 対象: append_log
-        # パターン: ログファイルが既存の場合、見出しを重複させず追記する
+        # パターン: ログファイルが既存の場合、見出しを重複させず追記し、対象期間を記録する
         log_path = tmp_path / "ood_report_log.md"
         log_path.write_text("# Open OnDemand 情報収集 報告ログ\n", encoding="utf-8")
-        ood.append_log(log_path, datetime(2026, 8, 13, 10, 0), [_make_entry(item_date="")])
+        ood.append_log(
+            log_path,
+            datetime(2026, 8, 13, 10, 0),
+            [_make_entry(item_date="")],
+            window_start="2026-07-14",
+            base_date="2026-08-13",
+            window_days=30,
+        )
         text = log_path.read_text(encoding="utf-8")
         assert text.count("# Open OnDemand 情報収集 報告ログ") == 1
+        assert "対象期間: 2026-07-14 〜 2026-08-13 (30日間)" in text
         assert "- [新規] v3.1.0 - 新機能が追加された - https://example.com/v3.1.0" in text
 
     def test_groups_entries_by_category_order(self, tmp_path):
@@ -827,8 +844,11 @@ class TestMain:
         report_files = [p.name for p in outdir.glob("report_*.md")]
         assert len(report_files) == 1
         assert report_files[0].startswith(f"report_{today}_")
-        # ログ見出しも基準日(2020-01-01)ではなく実行日
-        assert "2020-01-01" not in log_path.read_text(encoding="utf-8")
+        log_text = log_path.read_text(encoding="utf-8")
+        assert "## " in log_text
+        assert "対象期間: 2019-12-02 〜 2020-01-01 (30日間)" in log_text
+        assert "## 2020-01-01" not in log_text
+        assert "実行分" in log_text
 
     def test_invalid_base_date_returns_error_without_calling_api(
         self, tmp_path, monkeypatch, capsys
