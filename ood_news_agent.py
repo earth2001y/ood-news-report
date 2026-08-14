@@ -200,7 +200,7 @@ def build_researcher_agent(model: str) -> Agent:
     Returns:
         調査・報告用に指示文とツールを設定済みのAgentインスタンス。
     """
-    instructions = render_template("instructions.j2")
+    instructions = render_template("researcher_instructions.j2")
     return Agent(
         name="OOD News Reporter",
         instructions=instructions,
@@ -509,7 +509,7 @@ def main() -> int:
     researcher = build_researcher_agent(model=args.model)
 
     user_input = render_template(
-        "user_input.j2",
+        "researcher_input.j2",
         base_date=base_date.isoformat(),
         window_start=window_start.isoformat(),
         window_days=window_days,

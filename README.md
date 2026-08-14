@@ -154,8 +154,8 @@ Agentへの指示文・ユーザー入力プロンプトは `templates/` 配下�
 
 | ファイル | 用途 |
 | --- | --- |
-| `instructions.j2` | 調査担当Agentの指示文 |
-| `user_input.j2` | 調査担当Agentへのユーザー入力 |
+| `researcher_instructions.j2` | 調査担当Agentの指示文 |
+| `researcher_input.j2` | 調査担当Agentへのユーザー入力 |
 | `writer_instructions.j2` | 執筆担当Agentの指示文(記事の構成・文体) |
 | `writer_input.j2` | 執筆担当Agentへのユーザー入力(調査結果の受け渡し) |
 

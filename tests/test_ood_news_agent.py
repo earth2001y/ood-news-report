@@ -177,16 +177,16 @@ class TestReportItemCategory:
 
 class TestRenderTemplate:
     def test_instructions_contains_all_categories(self):
-        # 対象: render_template("instructions.j2")
+        # 対象: render_template("researcher_instructions.j2")
         # パターン: 全カテゴリ名が指示文に含まれる
-        rendered = ood.render_template("instructions.j2")
+        rendered = ood.render_template("researcher_instructions.j2")
         for category in ood.CATEGORIES:
             assert category in rendered
 
     def test_instructions_requires_bracketed_status_labels(self):
-        # 対象: render_template("instructions.j2")
+        # 対象: render_template("researcher_instructions.j2")
         # パターン: レポート項目のステータスラベルを角括弧付きで指定する
-        rendered = ood.render_template("instructions.j2")
+        rendered = ood.render_template("researcher_instructions.j2")
         assert "「[新規]」または「[更新]」" in rendered
         assert "半角角括弧" in rendered
 
@@ -250,10 +250,10 @@ class TestRenderTemplate:
         assert "日付: (不明)" in rendered
 
     def test_user_input_embeds_context_variables(self):
-        # 対象: render_template("user_input.j2")
+        # 対象: render_template("researcher_input.j2")
         # パターン: base_date/window_start/window_days/existing_logが本文に埋め込まれる
         rendered = ood.render_template(
-            "user_input.j2",
+            "researcher_input.j2",
             base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
@@ -265,10 +265,10 @@ class TestRenderTemplate:
         assert "(まだ記録はありません。今回が初回実行です)" in rendered
 
     def test_user_input_excludes_items_after_base_date(self):
-        # 対象: render_template("user_input.j2")
+        # 対象: render_template("researcher_input.j2")
         # パターン: 基準日より後の情報を対象外とする指示が含まれる
         rendered = ood.render_template(
-            "user_input.j2",
+            "researcher_input.j2",
             base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,

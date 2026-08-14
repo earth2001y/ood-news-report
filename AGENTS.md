@@ -47,7 +47,7 @@ CLI エージェント。
   - `main`: CLI エントリポイント。Agent 実行は `APIError` を捕捉し、
     スタックトレースではなく `ERROR` ログを出して終了コード 1 を返す。
 - `templates/`: Agent の指示文とユーザー入力の Jinja2 テンプレート
-  （調査担当は `instructions.j2` / `user_input.j2`、執筆担当は
+  （調査担当は `researcher_instructions.j2` / `researcher_input.j2`、執筆担当は
   `writer_instructions.j2` / `writer_input.j2`）。
 - `docs/`: ログおよびレポートのファイル形式。
 - `tests/`: pytest テスト。
