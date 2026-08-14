@@ -28,7 +28,8 @@ Web検索で収集し、日本語で報告するエージェントです。
    ログの内容は再構成の影響を受けません。
 3. **記事の再構成**: 執筆担当Agent(`build_writer_agent`)が調査結果を受け取り、
    箇条書きではなく地の文のニュースレター記事(`OODArticle`)に再構成します。
-   この Agent は Web検索ツールを持たず、調査結果に書かれた事実のみを使います。
+   この Agent は WebSearchTool で入力の事実を補足調査できますが、記事には
+   調査結果に書かれた事実のみを使います。
 4. **出力**: 再構成した記事を標準出力に表示し、レポートファイルに保存します。
 
 ## セットアップ
@@ -55,7 +56,7 @@ python ood_news_agent.py
 | --- | --- | --- |
 | `--log-path` | `ood_report_log.md` | 報告済み項目ログのパス |
 | `--model` | `gpt-5.4` | 使用するモデル(WebSearchTool対応のResponses APIモデル) |
-| `--writer-model` | 環境変数 `OOD_WRITER_MODEL`、未設定なら `--model` と同じ | 記事再構成に使うモデル(Web検索を行わないため検索対応は不要) |
+| `--writer-model` | 環境変数 `OOD_WRITER_MODEL`、未設定なら `--model` と同じ | 記事再構成に使うモデル(WebSearchTool対応モデル) |
 | `--outdir` | 環境変数 `OUTDIR`、未設定なら `output` | レポートファイルの出力先ディレクトリ |
 | `--window-days` | 環境変数 `WINDOW_DAYS`、未設定なら `30` | 調査対象期間(日数) |
 | `--base-date` | 環境変数 `BASE_DATE`、未設定なら実行日 | 調査対象期間の基準日(`YYYY-MM-DD`)。この日を終端とする |

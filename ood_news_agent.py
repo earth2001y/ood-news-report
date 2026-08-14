@@ -215,11 +215,12 @@ def build_writer_agent(model: str) -> Agent:
 
     [実装理由] 調査担当Agentの出力は箇条書き中心の報告文であり、読み物としての流れを欠く。
     同じAgentに調査と執筆の両方を担わせると、Web検索の途中経過が文章構成の判断に混ざり、
-    どちらの品質も安定しないため、執筆専用のAgentとして分離している。WebSearchToolを与えないのは、
-    再構成の段階で新たな事実が混入するのを構造的に防ぐため(入力に書かれた事実のみで書かせる)。
+    どちらの品質も安定しないため、執筆専用のAgentとして分離している。
+    WebSearchToolは入力の事実を理解するための補足調査に限定し、検索で得た新たな事実は記事に
+    追加しないよう指示文で制約している。
 
     Args:
-        model: 使用するモデル名。Web検索を行わないため、検索対応モデルである必要はない。
+        model: 使用するモデル名。WebSearchTool(Responses API)対応モデルを指定する。
 
     Returns:
         記事執筆用に指示文と出力スキーマを設定済みのAgentインスタンス。
@@ -229,6 +230,7 @@ def build_writer_agent(model: str) -> Agent:
         name="OOD News Writer",
         instructions=instructions,
         model=model,
+        tools=[WebSearchTool(search_context_size="medium")],
         output_type=OODArticle,
     )
 
@@ -380,7 +382,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--writer-model",
         default=os.environ.get("OOD_WRITER_MODEL"),
-        help="記事再構成に使うモデル (既定: 環境変数 OOD_WRITER_MODEL、未設定なら --model と同じ)",
+        help=(
+            "記事再構成に使うWebSearchTool対応モデル "
+            "(既定: 環境変数 OOD_WRITER_MODEL、未設定なら --model と同じ)"
+        ),
     )
     parser.add_argument(
         "--outdir",

@@ -198,12 +198,13 @@ class TestRenderTemplate:
         assert positions == sorted(positions)
         assert f"1. {ood.CATEGORIES[0]}" in rendered
 
-    def test_writer_instructions_forbids_bracket_labels_and_search(self):
+    def test_writer_instructions_forbids_bracket_labels_and_allows_supplemental_search(self):
         # 対象: render_template("writer_instructions.j2")
-        # パターン: 角括弧ラベルの禁止とWeb検索を行わない旨が指示に含まれる
+        # パターン: 角括弧ラベルを禁止し、事実の補足検索を許可する
         rendered = ood.render_template("writer_instructions.j2", categories=ood.CATEGORIES)
         assert "角括弧ラベルは使わない" in rendered
-        assert "Web検索を行わない" in rendered
+        assert "補足情報獲得のためのWeb検索はしてよい" in rendered
+        assert "事実の追加・推測・脚色は一切しない" in rendered
 
     def test_writer_input_embeds_entries_and_report(self):
         # 対象: render_template("writer_input.j2")
@@ -384,13 +385,13 @@ class TestBuildResearcherAgent:
 
 
 class TestBuildWriterAgent:
-    def test_sets_model_output_type_and_no_tools(self):
+    def test_sets_model_output_type_and_web_search_tool(self):
         # 対象: build_writer_agent
-        # パターン: 出力スキーマがOODArticleで、Web検索ツールを持たない
+        # パターン: 出力スキーマがOODArticleで、Web検索ツールを1つ持つ
         writer = ood.build_writer_agent(model="gpt-test")
         assert writer.model == "gpt-test"
         assert writer.output_type is OODArticle
-        assert writer.tools == []
+        assert len(writer.tools) == 1
         assert "ニュースレター記事" in writer.instructions
 
 
