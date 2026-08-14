@@ -20,6 +20,10 @@ $OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは
 
     # 調査対象期間(日数)を変える場合
     python ood_news_agent.py --window-days 30
+
+    # 進捗を表示する場合(既定のログレベルは WARNING)
+    python ood_news_agent.py --log-level INFO
+    OOD_LOG_LEVEL=INFO python ood_news_agent.py
 """
 
 from __future__ import annotations
@@ -27,7 +31,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -44,6 +47,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_DAYS = 30
 
+DEFAULT_LOG_LEVEL = "WARNING"
+
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 CATEGORIES = [
@@ -57,6 +64,37 @@ _jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATES_DIR),
     keep_trailing_newline=True,
 )
+
+
+def setup_logging(level_name: str | None) -> int:
+    """ロガーの出力レベルを設定する。
+
+    [実装理由] ログレベルをCLIオプションと環境変数の両方で指定できるようにしつつ、その解決と
+    `logging.basicConfig` の呼び出しをこの関数に集約している。既定を WARNING にしているのは、
+    通常実行時に利用者が見たいのは記事本文とエラーだけであり、進捗や内部状態の出力は調査時にだけ
+    有効にすべきものだからである。不正な値でエラー終了せず警告して既定値で続行するのは、ログ設定の
+    タイポで調査本体(API呼び出しを伴う主目的の処理)を止めてしまう方が損失が大きいためである。
+    警告は設定前のレベルに依存せず届くよう、`basicConfig` を済ませた後に出力する。
+
+    Args:
+        level_name: 設定するログレベル名(大文字小文字は区別しない)。Noneの場合は既定値を使う。
+
+    Returns:
+        実際に設定したログレベルの数値(`logging.WARNING` など)。
+    """
+    requested = (level_name or DEFAULT_LOG_LEVEL).upper()
+    invalid = requested not in LOG_LEVELS
+    resolved = DEFAULT_LOG_LEVEL if invalid else requested
+
+    logging.basicConfig(level=resolved, format="%(levelname)s: %(message)s", force=True)
+    if invalid:
+        logger.warning(
+            "ログレベル %r は不正です。%s を使用します。指定できる値: %s",
+            level_name,
+            DEFAULT_LOG_LEVEL,
+            ", ".join(LOG_LEVELS),
+        )
+    return logging.getLevelNamesMapping()[resolved]
 
 
 def render_template(name: str, **context: object) -> str:
@@ -316,6 +354,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("WINDOW_DAYS"),
         help=f"調査対象期間(日数) (既定: 環境変数 WINDOW_DAYS、未設定なら{DEFAULT_WINDOW_DAYS}日)",
     )
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("OOD_LOG_LEVEL"),
+        help=(
+            f"ログの出力レベル ({'/'.join(LOG_LEVELS)}) "
+            f"(既定: 環境変数 OOD_LOG_LEVEL、未設定なら {DEFAULT_LOG_LEVEL})"
+        ),
+    )
     parser.add_argument("--max-turns", type=int, default=40)
     return parser
 
@@ -375,14 +421,16 @@ def main() -> int:
     ログ追記を記事再構成より先に行うのは、ログの内容が調査担当Agentの構造化出力だけで確定しており、
     再構成が失敗しても収集済みの調査結果を失わないようにするためである。Agent実行を try/except で
     囲んでいるのは、API側の失敗(残高不足、キーの誤り、モデル名の誤りなど)はCLI利用者が対処できる
-    運用上のエラーであり、スタックトレースではなく対処方法を示すべきものだからである。
+    運用上のエラーであり、スタックトレースではなく対処方法を示すべきものだからである。進捗と完了
+    報告をINFOで出しているのは、既定のWARNINGでは記事本文とエラーだけが残り、パイプで他のコマンドへ
+    渡す用途を妨げないようにするためである(記事本文のみ標準出力、ログは標準エラー出力に出す)。
 
     Returns:
         プロセス終了コード。正常終了は0、APIキー未設定時およびAPI呼び出し失敗時は1。
     """
     args = build_parser().parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    setup_logging(args.log_level)
 
     if not os.environ.get("OPENAI_API_KEY"):
         logger.error(
@@ -409,7 +457,7 @@ def main() -> int:
     )
 
     period = f"{window_start.isoformat()} 〜 {today.isoformat()}"
-    print(f"Open OnDemand の最新情報を調査中... (対象期間: {period})", file=sys.stderr)
+    logger.info("Open OnDemand の最新情報を調査中... (対象期間: %s)", period)
 
     try:
         result = Runner.run_sync(researcher, input=user_input, max_turns=args.max_turns)
@@ -420,7 +468,7 @@ def main() -> int:
 
     append_log(log_path, run_at, report.log_entries)
 
-    print("調査結果をニュースレター記事に再構成中...", file=sys.stderr)
+    logger.info("調査結果をニュースレター記事に再構成中...")
     writer = build_writer_agent(model=args.writer_model or args.model)
     try:
         article_markdown = compose_article(
@@ -444,11 +492,8 @@ def main() -> int:
     report_path = write_report_file(Path(args.outdir), run_at, article_markdown)
 
     print(article_markdown)
-    print(
-        f"\n(ログファイル {log_path} に {len(report.log_entries)} 件を追記しました)"
-        f"\n(レポートを {report_path} に保存しました)",
-        file=sys.stderr,
-    )
+    logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.log_entries))
+    logger.info("レポートを %s に保存しました", report_path)
     return 0
 
 

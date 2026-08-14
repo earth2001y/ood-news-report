@@ -28,6 +28,8 @@ OpenAI Agents SDK (`openai-agents`) を使い、Open OnDemand (OSC/ondemand) の
 - `ood_news_agent.py`: エージェント本体。調査担当 Agent の構造化出力を執筆担当
   Agent が記事へ再構成する 2 段構成である。
   - `ReportItem` / `OODReport` / `OODArticle`: 構造化出力スキーマ。
+  - `setup_logging`: ログレベルを解決して設定する（`--log-level` / 環境変数
+    `OOD_LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。
   - `render_template`: `templates/` の Jinja2 テンプレートをレンダリングする。
   - `build_researcher_agent`: WebSearchTool と出力スキーマを設定した調査担当 Agent を
     構築する。

@@ -14,6 +14,12 @@ import ood_news_agent as ood
 from ood_news_agent import OODArticle, OODReport, ReportItem
 
 
+@pytest.fixture(autouse=True)
+def _default_log_level(monkeypatch):
+    """実行環境の OOD_LOG_LEVEL がテスト結果に影響しないよう、既定値の状態に揃える。"""
+    monkeypatch.delenv("OOD_LOG_LEVEL", raising=False)
+
+
 def _make_entry(**overrides):
     defaults = dict(
         category="新バージョンのリリース情報",
@@ -69,6 +75,59 @@ def _stub_agents(monkeypatch, report, article_markdown):
     monkeypatch.setattr(ood, "build_writer_agent", _build_writer_agent)
     monkeypatch.setattr(ood.Runner, "run_sync", _run_sync)
     return models
+
+
+class TestSetupLogging:
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [
+            ("DEBUG", logging.DEBUG),
+            ("INFO", logging.INFO),
+            ("WARNING", logging.WARNING),
+            ("ERROR", logging.ERROR),
+            ("CRITICAL", logging.CRITICAL),
+        ],
+    )
+    def test_valid_level_names(self, given, expected):
+        # 対象: setup_logging
+        # パターン: 有効なレベル名を渡すと、そのレベルが設定される
+        assert ood.setup_logging(given) == expected
+        assert logging.getLogger().level == expected
+
+    def test_lowercase_is_accepted(self):
+        # 対象: setup_logging
+        # パターン: 小文字で指定しても大文字と同じように解釈される
+        assert ood.setup_logging("info") == logging.INFO
+
+    def test_none_falls_back_to_default_warning(self):
+        # 対象: setup_logging
+        # パターン: Noneの場合、既定のWARNINGが設定される
+        assert ood.setup_logging(None) == logging.WARNING
+        assert logging.getLogger().level == logging.WARNING
+
+    def test_invalid_level_warns_and_uses_default(self, capsys):
+        # 対象: setup_logging
+        # パターン: 不正な値の場合、警告を出して既定のWARNINGで続行する
+        assert ood.setup_logging("VERBOSE") == logging.WARNING
+        err = capsys.readouterr().err
+        assert "WARNING: " in err
+        assert "'VERBOSE'" in err
+        # 指定できる値を警告に列挙する
+        assert "DEBUG" in err
+
+    def test_info_message_is_hidden_at_default_level(self, capsys):
+        # 対象: setup_logging
+        # パターン: 既定のWARNINGでは、INFOのメッセージが出力されない
+        ood.setup_logging(None)
+        ood.logger.info("進捗メッセージ")
+        assert "進捗メッセージ" not in capsys.readouterr().err
+
+    def test_info_message_is_shown_when_info_requested(self, capsys):
+        # 対象: setup_logging
+        # パターン: INFO指定時、INFOのメッセージが標準エラー出力に現れる
+        ood.setup_logging("INFO")
+        ood.logger.info("進捗メッセージ")
+        assert "進捗メッセージ" in capsys.readouterr().err
 
 
 class TestRenderTemplate:
@@ -368,6 +427,27 @@ class TestParseArguments:
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
         assert ood.build_parser().parse_args().writer_model is None
 
+    def test_log_level_defaults_to_none(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: --log-level未指定かつ環境変数なしの場合、None(=既定値扱い)になる
+        monkeypatch.delenv("OOD_LOG_LEVEL", raising=False)
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        assert ood.build_parser().parse_args().log_level is None
+
+    def test_log_level_reads_environment_variable(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 環境変数 OOD_LOG_LEVEL が既定値として使われる
+        monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        assert ood.build_parser().parse_args().log_level == "DEBUG"
+
+    def test_cli_log_level_overrides_environment_variable(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 環境変数より --log-level の指定が優先される
+        monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--log-level", "ERROR"])
+        assert ood.build_parser().parse_args().log_level == "ERROR"
+
 
 class TestDescribeApiError:
     @pytest.mark.parametrize(
@@ -404,7 +484,85 @@ class TestDescribeApiError:
 
 
 class TestMain:
-    def test_missing_api_key_returns_error(self, monkeypatch, caplog):
+    def test_progress_is_hidden_at_default_level(self, tmp_path, monkeypatch, capsys):
+        # 対象: main
+        # パターン: 既定のWARNINGでは、標準出力は記事のみで進捗ログが出ない
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        _stub_agents(monkeypatch, fake_report, "# 記事本文")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+            ],
+        )
+
+        assert ood.main() == 0
+
+        captured = capsys.readouterr()
+        # 記事本文は標準出力、進捗はINFOなので既定レベルでは出力されない
+        assert captured.out.strip() == "# 記事本文"
+        assert "調査中" not in captured.err
+        assert "保存しました" not in captured.err
+
+    def test_progress_is_shown_when_info_level_requested(self, tmp_path, monkeypatch, capsys):
+        # 対象: main
+        # パターン: --log-level INFO指定時、進捗と完了報告が標準エラー出力に出る
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        _stub_agents(monkeypatch, fake_report, "# 記事本文")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+                "--log-level",
+                "INFO",
+            ],
+        )
+
+        assert ood.main() == 0
+
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "# 記事本文"
+        assert "調査中" in captured.err
+        assert "再構成中" in captured.err
+        assert "1 件を追記しました" in captured.err
+        assert "保存しました" in captured.err
+
+    def test_invalid_log_level_warns_and_continues(self, tmp_path, monkeypatch, capsys):
+        # 対象: main
+        # パターン: 不正なログレベルでも処理を中断せず、警告を出して正常終了する
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        fake_report = OODReport(report_markdown="報告文", log_entries=[])
+        _stub_agents(monkeypatch, fake_report, "# 記事本文")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+                "--log-level",
+                "VERBOSE",
+            ],
+        )
+
+        assert ood.main() == 0
+        assert "ログレベル 'VERBOSE' は不正です" in capsys.readouterr().err
+
+    def test_missing_api_key_returns_error(self, monkeypatch, capsys):
         # 対象: main
         # パターン: OPENAI_API_KEY未設定時、終了コード1とERRORログを返す
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -412,10 +570,11 @@ class TestMain:
         with caplog.at_level(logging.ERROR):
             exit_code = ood.main()
         assert exit_code == 1
-        assert "OPENAI_API_KEY" in caplog.text
-        assert caplog.records[0].levelno == logging.ERROR
+        err = capsys.readouterr().err
+        assert "OPENAI_API_KEY" in err
+        assert err.startswith("ERROR: ")
 
-    def test_research_api_error_returns_error_without_writing(self, tmp_path, monkeypatch, caplog):
+    def test_research_api_error_returns_error_without_writing(self, tmp_path, monkeypatch, capsys):
         # 対象: main
         # パターン: 調査中のAPIエラー時、ログ・レポートを書かず終了コード1とERRORログを返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -433,16 +592,16 @@ class TestMain:
             ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
         )
 
-        with caplog.at_level(logging.ERROR):
-            exit_code = ood.main()
+        exit_code = ood.main()
 
         assert exit_code == 1
-        assert "調査に失敗しました" in caplog.text
-        assert "クレジットを追加" in caplog.text
+        err = capsys.readouterr().err
+        assert "調査に失敗しました" in err
+        assert "クレジットを追加" in err
         assert not log_path.exists()
         assert not outdir.exists()
 
-    def test_writer_api_error_keeps_log_and_returns_error(self, tmp_path, monkeypatch, caplog):
+    def test_writer_api_error_keeps_log_and_returns_error(self, tmp_path, monkeypatch, capsys):
         # 対象: main
         # パターン: 再構成中のAPIエラー時、ログ追記は保持しレポートを書かず終了コード1を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -463,11 +622,10 @@ class TestMain:
             ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
         )
 
-        with caplog.at_level(logging.ERROR):
-            exit_code = ood.main()
+        exit_code = ood.main()
 
         assert exit_code == 1
-        assert "記事の再構成に失敗しました" in caplog.text
+        assert "記事の再構成に失敗しました" in capsys.readouterr().err
         # 調査結果は失われない
         assert log_path.exists()
         assert "v3.1.0" in log_path.read_text(encoding="utf-8")

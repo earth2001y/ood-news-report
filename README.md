@@ -55,11 +55,35 @@ python ood_news_agent.py
 | `--writer-model` | 環境変数 `OOD_WRITER_MODEL`、未設定なら `--model` と同じ | 記事再構成に使うモデル(Web検索を行わないため検索対応は不要) |
 | `--outdir` | 環境変数 `OUTDIR`、未設定なら `output` | レポートファイルの出力先ディレクトリ |
 | `--window-days` | 環境変数 `WINDOW_DAYS`、未設定なら `30` | 調査対象期間(日数) |
+| `--log-level` | 環境変数 `OOD_LOG_LEVEL`、未設定なら `WARNING` | ログの出力レベル(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`) |
 | `--max-turns` | `40` | Agent実行の最大ターン数 |
+
+### ログレベル
+
+既定の `WARNING` では、標準出力に記事本文だけが出ます。進捗(調査中・再構成中)や
+完了報告(ログ追記件数・レポートの保存先)は `INFO` なので表示されません。
+
+```bash
+# 進捗を表示する
+python ood_news_agent.py --log-level INFO
+
+# 環境変数でも指定できる(CLIオプションが優先)
+OOD_LOG_LEVEL=INFO python ood_news_agent.py
+```
+
+大文字小文字は区別しません(`info` でも可)。不正な値を指定した場合は警告を出して
+`WARNING` で実行を続けます(ログ設定のタイポで調査そのものを止めないため)。
+
+ログはすべて標準エラー出力に出るため、記事本文だけを取り出すことができます。
+
+```bash
+python ood_news_agent.py --log-level INFO 2>/dev/null > report.md
+```
 
 ## 出力
 
-- 標準出力: 日本語・カテゴリ別のニュースレター記事(リード文＋地の文の解説、出典URL付き)
+- 標準出力: 日本語・カテゴリ別のニュースレター記事(リード文＋地の文の解説、出典URL付き)。
+  記事本文のみで、進捗やエラーは標準エラー出力に分離される
 - `$OUTDIR/report_YYYYMMDD_HHMM.md`: 標準出力と同じ記事本文を実行ごとに
   ファイルとしても保存する(ディレクトリが存在しない場合は自動作成)
   (フォーマットの詳細は [docs/report_file_format.md](docs/report_file_format.md) 参照)
@@ -70,7 +94,8 @@ python ood_news_agent.py
 ## エラー時の挙動
 
 OpenAI API の呼び出しが失敗した場合、スタックトレースではなく原因と対処方法を
-`ERROR` ログとして標準エラー出力に表示し、終了コード 1 で終了します。
+`ERROR` ログとして標準エラー出力に表示し、終了コード 1 で終了します。既定の
+`WARNING` でも `ERROR` は表示されるため、ログレベルの設定に関わらず失敗は分かります。
 
 | エラーコード | 意味・対処 |
 | --- | --- |
