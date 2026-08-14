@@ -58,6 +58,7 @@ CATEGORIES = [
     "開発ロードマップの更新・公開",
     "セキュリティ脆弱性情報",
     "コミュニティイベント",
+    "その他のホットトピック",
 ]
 
 _jinja_env = Environment(
@@ -120,7 +121,8 @@ class ReportItem(BaseModel):
         "開発ロードマップの更新・公開",
         "セキュリティ脆弱性情報",
         "コミュニティイベント",
-    ] = Field(description="4カテゴリのいずれか")
+        "その他のホットトピック",
+    ] = Field(description="5カテゴリのいずれか")
     status: Literal["新規", "更新"] = Field(description="変更なしの項目はここに含めない")
     title: str = Field(description="項目のタイトル(バージョン名、CVE ID、イベント名など)")
     item_date: str = Field(description="公開日・更新日。YYYY-MM-DD形式。不明な場合は空文字")

@@ -19,7 +19,8 @@
 
 OpenAI Agents SDK (`openai-agents`) を使い、Open OnDemand (OSC/ondemand) の
 最新情報（新バージョンリリース、ロードマップ、セキュリティ脆弱性、
-コミュニティイベント）を Web 検索で収集し、日本語で報告する CLI エージェント。
+コミュニティイベント、その他のホットトピック）を Web 検索で収集し、日本語で報告する
+CLI エージェント。
 
 詳細な使い方は `README.md` を参照すること。
 

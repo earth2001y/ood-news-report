@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from datetime import datetime
+from typing import get_args
 
 import httpx
 import pytest
@@ -130,10 +131,23 @@ class TestSetupLogging:
         assert "進捗メッセージ" in capsys.readouterr().err
 
 
+class TestReportItemCategory:
+    def test_literal_matches_categories(self):
+        # 対象: ReportItem.category
+        # パターン: 許容値がCATEGORIESと順序を含めて一致する（定義の二重管理による乖離の検出）
+        allowed = get_args(ReportItem.model_fields["category"].annotation)
+        assert list(allowed) == ood.CATEGORIES
+
+    def test_accepts_other_hot_topics(self):
+        # パターン: 追加カテゴリ「その他のホットトピック」の項目を構築できる
+        entry = _make_entry(category="その他のホットトピック")
+        assert entry.category == "その他のホットトピック"
+
+
 class TestRenderTemplate:
     def test_instructions_contains_all_categories(self):
         # 対象: render_template("instructions.j2")
-        # パターン: 4カテゴリ名すべてが指示文に含まれる
+        # パターン: 全カテゴリ名が指示文に含まれる
         rendered = ood.render_template("instructions.j2")
         for category in ood.CATEGORIES:
             assert category in rendered
@@ -147,7 +161,7 @@ class TestRenderTemplate:
 
     def test_writer_instructions_lists_categories_in_order(self):
         # 対象: render_template("writer_instructions.j2")
-        # パターン: categoriesを渡すと4カテゴリがCATEGORIESの順で番号付きで並ぶ
+        # パターン: categoriesを渡すと全カテゴリがCATEGORIESの順で番号付きで並ぶ
         rendered = ood.render_template("writer_instructions.j2", categories=ood.CATEGORIES)
         positions = [rendered.index(category) for category in ood.CATEGORIES]
         assert positions == sorted(positions)
