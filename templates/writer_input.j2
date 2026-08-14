@@ -1,0 +1,24 @@
+調査対象期間: {{ window_start }} 〜 {{ today }} (直近{{ window_days }}日間)
+
+--- 調査担当エージェントによる調査結果 ---
+{% if entries %}{% for entry in entries %}
+[{{ loop.index }}]
+カテゴリ: {{ entry.category }}
+区分: {{ entry.status }}
+タイトル: {{ entry.title }}
+日付: {{ entry.item_date if entry.item_date else "(不明)" }}
+URL: {{ entry.url }}
+要約: {{ entry.summary }}
+{% if entry.change_note %}変更点: {{ entry.change_note }}
+{% endif %}{% endfor %}
+{% else %}
+(今回の期間内に新規・更新の項目はありませんでした)
+{% endif %}
+--- 調査結果終わり ---
+
+--- 調査担当エージェントによる報告文(参考) ---
+{{ report_markdown }}
+--- 報告文終わり ---
+
+上記の調査結果をもとに、指示された構成のニュースレター記事を作成してください。
+事実は上記に書かれている範囲に限り、新たな情報を加えないでください。

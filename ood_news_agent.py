@@ -3,7 +3,10 @@
 
 OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を行う。実行するたびに、
 作業ディレクトリの ood_report_log.md と今回の調査結果を突き合わせ、新規・更新のみを報告し、
-ログに追記する。レポート本文は標準出力に加えて、$OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。
+ログに追記する。処理は2段構成で、調査担当Agentの構造化出力(OODReport)を執筆担当Agentが
+ニュースレター記事(OODArticle)へ再構成する。記事本文は標準出力に加えて、
+$OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは調査担当Agentの
+構造化出力(log_entries)であり、再構成の影響を受けない。
 
 使い方:
     export OPENAI_API_KEY=sk-...
@@ -12,6 +15,9 @@ OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を�
     # ログファイルの場所やモデル、レポート出力先を変える場合
     python ood_news_agent.py --log-path ./ood_report_log.md --model gpt-5.4 --outdir ./output
 
+    # 記事再構成だけ別のモデルで行う場合
+    python ood_news_agent.py --writer-model gpt-5.4
+
     # 調査対象期間(日数)を変える場合
     python ood_news_agent.py --window-days 30
 """
@@ -19,6 +25,7 @@ OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を�
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from datetime import datetime, timedelta
@@ -28,9 +35,12 @@ from typing import Literal
 from agents import Agent, Runner, WebSearchTool
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
+from openai import APIError
 from pydantic import BaseModel, Field
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_DAYS = 30
 
@@ -93,8 +103,14 @@ class OODReport(BaseModel):
     )
 
 
-def build_agent(model: str) -> Agent:
-    """Open OnDemand調査用のAgentを構築する。
+class OODArticle(BaseModel):
+    article_markdown: str = Field(
+        description="調査結果を再構成した、日本語のニュースレター記事本文(Markdown)"
+    )
+
+
+def build_researcher_agent(model: str) -> Agent:
+    """Open OnDemand調査用の調査担当Agentを構築する。
 
     [実装理由] WebSearchToolによるWeb検索と、構造化出力(OODReport)を組み合わせたAgentを生成する。
     レポート本文(report_markdown)とログ追記用データ(log_entries)を出力スキーマ上で分離しているのは、
@@ -115,6 +131,69 @@ def build_agent(model: str) -> Agent:
         tools=[WebSearchTool(search_context_size="medium")],
         output_type=OODReport,
     )
+
+
+def build_writer_agent(model: str) -> Agent:
+    """調査結果をニュースレター記事へ再構成するAgentを構築する。
+
+    [実装理由] 調査担当Agentの出力は箇条書き中心の報告文であり、読み物としての流れを欠く。
+    同じAgentに調査と執筆の両方を担わせると、Web検索の途中経過が文章構成の判断に混ざり、
+    どちらの品質も安定しないため、執筆専用のAgentとして分離している。WebSearchToolを与えないのは、
+    再構成の段階で新たな事実が混入するのを構造的に防ぐため(入力に書かれた事実のみで書かせる)。
+
+    Args:
+        model: 使用するモデル名。Web検索を行わないため、検索対応モデルである必要はない。
+
+    Returns:
+        記事執筆用に指示文と出力スキーマを設定済みのAgentインスタンス。
+    """
+    instructions = render_template("writer_instructions.j2", categories=CATEGORIES)
+    return Agent(
+        name="OOD News Writer",
+        instructions=instructions,
+        model=model,
+        output_type=OODArticle,
+    )
+
+
+def compose_article(
+    writer: Agent,
+    report: OODReport,
+    today: str,
+    window_start: str,
+    window_days: int,
+    max_turns: int,
+) -> str:
+    """調査結果(OODReport)を執筆担当Agentに渡し、記事本文を得る。
+
+    [実装理由] 執筆担当Agentへの入力組み立てと実行をmainから切り出しているのは、入力に含める情報
+    (構造化された項目一覧と調査担当Agentの報告文)の範囲がこのステップの出力品質を左右する設計上の
+    要点であり、単独で読めて単独でテストできる形にしておきたいためである。構造化データ(log_entries)
+    だけでなく report_markdown も併せて渡すのは、カテゴリごとの「変更なし」判定など、構造化データに
+    現れない調査担当Agentの判断を執筆側から参照できるようにするため。
+
+    Args:
+        writer: build_writer_agentで構築した執筆担当Agent。
+        report: 調査担当Agentの構造化出力。
+        today: 本日日付(YYYY-MM-DD)。
+        window_start: 調査対象期間の開始日(YYYY-MM-DD)。
+        window_days: 調査対象期間の日数。
+        max_turns: Agent実行の最大ターン数。
+
+    Returns:
+        再構成された記事本文(Markdown)。
+    """
+    writer_input = render_template(
+        "writer_input.j2",
+        today=today,
+        window_start=window_start,
+        window_days=window_days,
+        entries=report.log_entries,
+        report_markdown=report.report_markdown,
+    )
+    result = Runner.run_sync(writer, input=writer_input, max_turns=max_turns)
+    article: OODArticle = result.final_output
+    return article.article_markdown
 
 
 def load_log(log_path: Path) -> str:
@@ -177,24 +256,27 @@ def append_log(log_path: Path, run_at: datetime, entries: list[ReportItem]) -> N
             f.write(header + text)
 
 
-def write_report_file(outdir: Path, run_at: datetime, report_markdown: str) -> Path:
+def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> Path:
     """レポート本文を `report_<実行日時>.md` としてファイルに保存する。
 
     [実装理由] 標準出力だけでは実行環境によっては後から結果を追えないため、
     実行ごとに一意なファイル名(分単位のタイムスタンプ入り)で保存し、
-    過去のレポートを上書きせず蓄積できるようにする。
+    過去のレポートを上書きせず蓄積できるようにする。保存するのは執筆担当Agentが再構成した記事本文で
+    あり、調査担当Agentの箇条書き報告文は保存しない。両方を残すとどちらが正なのか読み手が判断できず、
+    ログ(ood_report_log.md)に構造化データが残っている以上、記事側は読み物として一本化する方が
+    用途が明確になるためである。
 
     Args:
         outdir: 出力先ディレクトリ。存在しない場合は作成する。
         run_at: 実行日時。ファイル名(YYYYMMDD_HHMM)に使う。
-        report_markdown: 保存するレポート本文(Markdown)。
+        article_markdown: 保存する記事本文(Markdown)。
 
     Returns:
         書き込んだファイルのパス。
     """
     outdir.mkdir(parents=True, exist_ok=True)
     report_path = outdir / f"report_{run_at.strftime('%Y%m%d_%H%M')}.md"
-    report_path.write_text(report_markdown, encoding="utf-8")
+    report_path.write_text(article_markdown, encoding="utf-8")
     return report_path
 
 
@@ -219,6 +301,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="使用するモデル (既定: gpt-5.4。WebSearchTool対応モデルを指定すること)",
     )
     parser.add_argument(
+        "--writer-model",
+        default=os.environ.get("OOD_WRITER_MODEL"),
+        help="記事再構成に使うモデル (既定: 環境変数 OOD_WRITER_MODEL、未設定なら --model と同じ)",
+    )
+    parser.add_argument(
         "--outdir",
         default=os.environ.get("OUTDIR", "output"),
         help="レポートファイルの出力先ディレクトリ (既定: 環境変数 OUTDIR、未設定なら ./output)",
@@ -233,8 +320,51 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+API_ERROR_HINTS = {
+    "credit_balance_exhausted": (
+        "OpenAI APIの残高が不足している。"
+        "https://platform.openai.com/settings/organization/billing/ でクレジットを追加すること。"
+    ),
+    "insufficient_quota": (
+        "OpenAI APIの利用可能枠を超えている。"
+        "https://platform.openai.com/settings/organization/billing/ で残高と上限を確認すること。"
+    ),
+    "invalid_api_key": (
+        "OPENAI_API_KEY が無効である。キーの値が正しいか、失効していないかを確認すること。"
+    ),
+    "model_not_found": (
+        "指定したモデルが利用できない。モデル名の綴りと、"
+        "そのモデルがアカウントで利用可能かを確認すること。--model で指定し直すこと。"
+    ),
+}
+
+
+def describe_api_error(error: APIError) -> str:
+    """OpenAI APIのエラーを、対処方法を含む日本語1行メッセージに変換する。
+
+    [実装理由] Agent実行が失敗したときにスタックトレースをそのまま見せると、原因(残高不足、キーの
+    誤り、モデル名の誤りなど)と対処方法が読み取れない。エラー種別ごとの対処方法をこの関数に集約し、
+    呼び出し側はログ出力に専念できるようにしている。判別に例外クラスではなく `code` を使うのは、
+    残高不足とレート制限超過がどちらも RateLimitError として送られてくるなど、クラスだけでは
+    対処方法を分けられないためである。未知の `code` でもAPIからのメッセージは必ず提示し、
+    情報を失わないようにする。
+
+    Args:
+        error: openai パッケージが送出した APIError(またはそのサブクラス)。
+
+    Returns:
+        原因と対処方法を含む日本語のメッセージ。
+    """
+    hint = API_ERROR_HINTS.get(error.code or "")
+    if hint is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        status_part = f"(HTTP {status}) " if status else ""
+        return f"OpenAI APIの呼び出しに失敗した。{status_part}{error.message}"
+    return f"{hint}\n(APIからの応答: {error.message})"
+
+
 def main() -> int:
-    """CLIエントリポイント。調査を実行し、ログ追記・レポート保存・結果表示までを行う。
+    """CLIエントリポイント。調査・記事再構成を実行し、ログ追記・レポート保存・結果表示までを行う。
 
     [実装理由] 引数解析からAgent実行・ログ追記・レポート保存までを1関数にまとめているのは、これらが
     「1回の実行」というひとまとまりの処理であり、run_at・log_path・report のような途中の値を下位関数
@@ -242,17 +372,22 @@ def main() -> int:
     やAgent構築など再利用性のある処理は個別関数に分離し、mainはその呼び出し順序の制御に専念する。ま
     た、調査対象期間は初回実行かどうかにかかわらず既定で30日固定とし、`--window-days`(または環境変数
     WINDOW_DAYS)を指定した場合のみ上書きするという挙動も、この関数内の設計判断として含まれる。
+    ログ追記を記事再構成より先に行うのは、ログの内容が調査担当Agentの構造化出力だけで確定しており、
+    再構成が失敗しても収集済みの調査結果を失わないようにするためである。Agent実行を try/except で
+    囲んでいるのは、API側の失敗(残高不足、キーの誤り、モデル名の誤りなど)はCLI利用者が対処できる
+    運用上のエラーであり、スタックトレースではなく対処方法を示すべきものだからである。
 
     Returns:
-        プロセス終了コード。正常終了は0、APIキー未設定時は1。
+        プロセス終了コード。正常終了は0、APIキー未設定時およびAPI呼び出し失敗時は1。
     """
     args = build_parser().parse_args()
 
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
     if not os.environ.get("OPENAI_API_KEY"):
-        print(
-            "エラー: 環境変数 OPENAI_API_KEY が設定されていません。\n"
-            "export OPENAI_API_KEY=sk-... を実行するか、.env ファイルに設定してください。",
-            file=sys.stderr,
+        logger.error(
+            "環境変数 OPENAI_API_KEY が設定されていません。"
+            "export OPENAI_API_KEY=sk-... を実行するか、.env ファイルに設定してください。"
         )
         return 1
 
@@ -263,7 +398,7 @@ def main() -> int:
     window_start = today - timedelta(days=window_days)
     existing_log = load_log(log_path)
 
-    agent = build_agent(model=args.model)
+    researcher = build_researcher_agent(model=args.model)
 
     user_input = render_template(
         "user_input.j2",
@@ -276,13 +411,39 @@ def main() -> int:
     period = f"{window_start.isoformat()} 〜 {today.isoformat()}"
     print(f"Open OnDemand の最新情報を調査中... (対象期間: {period})", file=sys.stderr)
 
-    result = Runner.run_sync(agent, input=user_input, max_turns=args.max_turns)
+    try:
+        result = Runner.run_sync(researcher, input=user_input, max_turns=args.max_turns)
+    except APIError as e:
+        logger.error("調査に失敗しました。%s", describe_api_error(e))
+        return 1
     report: OODReport = result.final_output
 
     append_log(log_path, run_at, report.log_entries)
-    report_path = write_report_file(Path(args.outdir), run_at, report.report_markdown)
 
-    print(report.report_markdown)
+    print("調査結果をニュースレター記事に再構成中...", file=sys.stderr)
+    writer = build_writer_agent(model=args.writer_model or args.model)
+    try:
+        article_markdown = compose_article(
+            writer,
+            report,
+            today=today.isoformat(),
+            window_start=window_start.isoformat(),
+            window_days=window_days,
+            max_turns=args.max_turns,
+        )
+    except APIError as e:
+        logger.error(
+            "記事の再構成に失敗しました。%s\n"
+            "(調査結果は %s に追記済みです。再実行すると、追記済みの項目は"
+            "「変更なし」と判定され再報告されない点に注意してください)",
+            describe_api_error(e),
+            log_path,
+        )
+        return 1
+
+    report_path = write_report_file(Path(args.outdir), run_at, article_markdown)
+
+    print(article_markdown)
     print(
         f"\n(ログファイル {log_path} に {len(report.log_entries)} 件を追記しました)"
         f"\n(レポートを {report_path} に保存しました)",

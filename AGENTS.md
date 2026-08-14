@@ -25,14 +25,25 @@ OpenAI Agents SDK (`openai-agents`) を使い、Open OnDemand (OSC/ondemand) の
 
 ## 主な構成
 
-- `ood_news_agent.py`: エージェント本体。
-  - `ReportItem` / `OODReport`: 構造化出力スキーマ。
+- `ood_news_agent.py`: エージェント本体。調査担当 Agent の構造化出力を執筆担当
+  Agent が記事へ再構成する 2 段構成である。
+  - `ReportItem` / `OODReport` / `OODArticle`: 構造化出力スキーマ。
   - `render_template`: `templates/` の Jinja2 テンプレートをレンダリングする。
-  - `build_agent`: WebSearchTool と出力スキーマを設定した Agent を構築する。
-  - `load_log` / `append_log`: `ood_report_log.md` を読み込み、追記する。
-  - `write_report_file`: レポートを `$OUTDIR/report_YYYYMMDD_HHMM.md` に保存する。
-  - `main`: CLI エントリポイント。
-- `templates/`: Agent の指示文とユーザー入力の Jinja2 テンプレート。
+  - `build_researcher_agent`: WebSearchTool と出力スキーマを設定した調査担当 Agent を
+    構築する。
+  - `build_writer_agent`: 調査結果を記事へ再構成する執筆担当 Agent を構築する
+    （Web 検索ツールは持たせない）。
+  - `compose_article`: 調査結果を執筆担当 Agent に渡し、記事本文を得る。
+  - `load_log` / `append_log`: `ood_report_log.md` を読み込み、追記する。追記する
+    のは `OODReport.log_entries` であり、再構成後の記事ではない。
+  - `write_report_file`: 記事を `$OUTDIR/report_YYYYMMDD_HHMM.md` に保存する。
+  - `describe_api_error`: OpenAI API のエラーを、対処方法を含む日本語メッセージに
+    変換する。対処方法の文言は `API_ERROR_HINTS` に集約する。
+  - `main`: CLI エントリポイント。Agent 実行は `APIError` を捕捉し、
+    スタックトレースではなく `ERROR` ログを出して終了コード 1 を返す。
+- `templates/`: Agent の指示文とユーザー入力の Jinja2 テンプレート
+  （調査担当は `instructions.j2` / `user_input.j2`、執筆担当は
+  `writer_instructions.j2` / `writer_input.j2`）。
 - `docs/`: ログおよびレポートのファイル形式。
 - `tests/`: pytest テスト。
 - `pyproject.toml`: ruff と pytest の設定。

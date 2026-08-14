@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import datetime
 
+import httpx
+import pytest
+from openai import APIConnectionError, RateLimitError
+
 import ood_news_agent as ood
-from ood_news_agent import OODReport, ReportItem
+from ood_news_agent import OODArticle, OODReport, ReportItem
 
 
 def _make_entry(**overrides):
@@ -23,6 +28,49 @@ def _make_entry(**overrides):
     return ReportItem(**defaults)
 
 
+def _make_api_error(code="credit_balance_exhausted", status=429, message="no credits remaining"):
+    """OpenAI APIが返すエラーを模した RateLimitError を組み立てる。"""
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx.Response(
+        status, json={"error": {"message": message, "code": code}}, request=request
+    )
+    return RateLimitError(
+        f"Error code: {status} - {message}", response=response, body={"code": code}
+    )
+
+
+def _raise(error):
+    """lambda の中から例外を送出するためのヘルパー。"""
+    raise error
+
+
+def _stub_agents(monkeypatch, report, article_markdown):
+    """main が実行する調査・執筆の2つのAgentをモックに置き換え、渡されたモデル名を記録する。"""
+    models = {}
+
+    class _Sentinel:
+        def __init__(self, kind):
+            self.kind = kind
+
+    def _build_researcher_agent(model):
+        models["researcher"] = model
+        return _Sentinel("researcher")
+
+    def _build_writer_agent(model):
+        models["writer"] = model
+        return _Sentinel("writer")
+
+    def _run_sync(agent, input, max_turns):
+        is_researcher = agent.kind == "researcher"
+        output = report if is_researcher else OODArticle(article_markdown=article_markdown)
+        return type("_FakeResult", (), {"final_output": output})
+
+    monkeypatch.setattr(ood, "build_researcher_agent", _build_researcher_agent)
+    monkeypatch.setattr(ood, "build_writer_agent", _build_writer_agent)
+    monkeypatch.setattr(ood.Runner, "run_sync", _run_sync)
+    return models
+
+
 class TestRenderTemplate:
     def test_instructions_contains_all_categories(self):
         # 対象: render_template("instructions.j2")
@@ -37,6 +85,64 @@ class TestRenderTemplate:
         rendered = ood.render_template("instructions.j2")
         assert "「[新規]」または「[更新]」" in rendered
         assert "半角角括弧" in rendered
+
+    def test_writer_instructions_lists_categories_in_order(self):
+        # 対象: render_template("writer_instructions.j2")
+        # パターン: categoriesを渡すと4カテゴリがCATEGORIESの順で番号付きで並ぶ
+        rendered = ood.render_template("writer_instructions.j2", categories=ood.CATEGORIES)
+        positions = [rendered.index(category) for category in ood.CATEGORIES]
+        assert positions == sorted(positions)
+        assert f"1. {ood.CATEGORIES[0]}" in rendered
+
+    def test_writer_instructions_forbids_bracket_labels_and_search(self):
+        # 対象: render_template("writer_instructions.j2")
+        # パターン: 角括弧ラベルの禁止とWeb検索を行わない旨が指示に含まれる
+        rendered = ood.render_template("writer_instructions.j2", categories=ood.CATEGORIES)
+        assert "角括弧ラベルは使わない" in rendered
+        assert "Web検索を行わない" in rendered
+
+    def test_writer_input_embeds_entries_and_report(self):
+        # 対象: render_template("writer_input.j2")
+        # パターン: 各項目のフィールドと調査担当Agentの報告文が本文に埋め込まれる
+        rendered = ood.render_template(
+            "writer_input.j2",
+            today="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            entries=[_make_entry(status="更新", change_note="深刻度がCriticalに変更")],
+            report_markdown="## 新バージョンのリリース情報\n\n- [更新] v3.1.0",
+        )
+        assert "2026-07-14 〜 2026-08-13" in rendered
+        assert "v3.1.0" in rendered
+        assert "https://example.com/v3.1.0" in rendered
+        assert "深刻度がCriticalに変更" in rendered
+        assert "- [更新] v3.1.0" in rendered
+
+    def test_writer_input_marks_empty_entries(self):
+        # 対象: render_template("writer_input.j2")
+        # パターン: entriesが空の場合、新規・更新なしを示す文言が入る
+        rendered = ood.render_template(
+            "writer_input.j2",
+            today="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            entries=[],
+            report_markdown="変更なし",
+        )
+        assert "(今回の期間内に新規・更新の項目はありませんでした)" in rendered
+
+    def test_writer_input_marks_unknown_item_date(self):
+        # 対象: render_template("writer_input.j2")
+        # パターン: item_dateが空文字の場合、日付が不明であることを明示する
+        rendered = ood.render_template(
+            "writer_input.j2",
+            today="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            entries=[_make_entry(item_date="")],
+            report_markdown="本文",
+        )
+        assert "日付: (不明)" in rendered
 
     def test_user_input_embeds_context_variables(self):
         # 対象: render_template("user_input.j2")
@@ -149,15 +255,77 @@ class TestWriteReportFile:
         assert report_path.read_text(encoding="utf-8") == "2回目"
 
 
-class TestBuildAgent:
+class TestBuildResearcherAgent:
     def test_sets_model_instructions_and_output_type(self):
-        # 対象: build_agent
+        # 対象: build_researcher_agent
         # パターン: 指定したmodel・instructions・output_type・toolsが設定される
-        agent = ood.build_agent(model="gpt-5.4")
-        assert agent.model == "gpt-5.4"
-        assert agent.output_type is OODReport
-        assert "Open OnDemand" in agent.instructions
-        assert len(agent.tools) == 1
+        researcher = ood.build_researcher_agent(model="gpt-5.4")
+        assert researcher.model == "gpt-5.4"
+        assert researcher.output_type is OODReport
+        assert "Open OnDemand" in researcher.instructions
+        assert len(researcher.tools) == 1
+
+
+class TestBuildWriterAgent:
+    def test_sets_model_output_type_and_no_tools(self):
+        # 対象: build_writer_agent
+        # パターン: 出力スキーマがOODArticleで、Web検索ツールを持たない
+        writer = ood.build_writer_agent(model="gpt-test")
+        assert writer.model == "gpt-test"
+        assert writer.output_type is OODArticle
+        assert writer.tools == []
+        assert "ニュースレター記事" in writer.instructions
+
+
+class TestComposeArticle:
+    def test_returns_article_markdown_from_agent_output(self, monkeypatch):
+        # 対象: compose_article
+        # パターン: 執筆担当Agentの出力からarticle_markdownを取り出して返す
+        class _FakeResult:
+            final_output = OODArticle(article_markdown="# 記事本文")
+
+        monkeypatch.setattr(ood.Runner, "run_sync", lambda agent, input, max_turns: _FakeResult())
+        report = OODReport(report_markdown="- [新規] v3.1.0", log_entries=[_make_entry()])
+
+        article = ood.compose_article(
+            object(),
+            report,
+            today="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            max_turns=12,
+        )
+
+        assert article == "# 記事本文"
+
+    def test_passes_entries_and_report_to_agent(self, monkeypatch):
+        # 対象: compose_article
+        # パターン: 構造化項目と調査担当Agentの報告文の両方が入力に含まれる
+        captured = {}
+
+        class _FakeResult:
+            final_output = OODArticle(article_markdown="# 記事本文")
+
+        def _fake_run_sync(agent, input, max_turns):
+            captured["input"] = input
+            captured["max_turns"] = max_turns
+            return _FakeResult()
+
+        monkeypatch.setattr(ood.Runner, "run_sync", _fake_run_sync)
+        report = OODReport(report_markdown="報告文の本文", log_entries=[_make_entry()])
+
+        ood.compose_article(
+            object(),
+            report,
+            today="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            max_turns=12,
+        )
+
+        assert "v3.1.0" in captured["input"]
+        assert "報告文の本文" in captured["input"]
+        assert captured["max_turns"] == 12
 
 
 class TestParseArguments:
@@ -173,6 +341,8 @@ class TestParseArguments:
                 "custom-log.md",
                 "--model",
                 "gpt-test",
+                "--writer-model",
+                "gpt-writer",
                 "--outdir",
                 "custom-output",
                 "--window-days",
@@ -186,34 +356,132 @@ class TestParseArguments:
 
         assert args.log_path == "custom-log.md"
         assert args.model == "gpt-test"
+        assert args.writer_model == "gpt-writer"
         assert args.outdir == "custom-output"
         assert args.window_days == 7
         assert args.max_turns == 12
 
+    def test_writer_model_defaults_to_none(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: --writer-model未指定かつ環境変数なしの場合、Noneになる
+        monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        assert ood.build_parser().parse_args().writer_model is None
+
+
+class TestDescribeApiError:
+    @pytest.mark.parametrize(
+        ("code", "expected"),
+        [
+            ("credit_balance_exhausted", "クレジットを追加"),
+            ("insufficient_quota", "残高と上限を確認"),
+            ("invalid_api_key", "OPENAI_API_KEY が無効"),
+            ("model_not_found", "モデル名の綴り"),
+        ],
+    )
+    def test_known_codes_include_remedy(self, code, expected):
+        # 対象: describe_api_error
+        # パターン: 既知のエラーコードには対処方法とAPI応答の両方が含まれる
+        message = ood.describe_api_error(_make_api_error(code=code, message="原文メッセージ"))
+        assert expected in message
+        assert "原文メッセージ" in message
+
+    def test_unknown_code_falls_back_to_status_and_message(self):
+        # 対象: describe_api_error
+        # パターン: 未知のエラーコードでもHTTPステータスとAPIのメッセージを提示する
+        message = ood.describe_api_error(
+            _make_api_error(code="something_new", status=500, message="internal error")
+        )
+        assert "HTTP 500" in message
+        assert "internal error" in message
+
+    def test_connection_error_without_response(self):
+        # 対象: describe_api_error
+        # パターン: responseを持たない接続エラーでも例外にならずメッセージを返す
+        request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+        message = ood.describe_api_error(APIConnectionError(request=request))
+        assert "OpenAI APIの呼び出しに失敗した" in message
+
 
 class TestMain:
-    def test_missing_api_key_returns_error(self, monkeypatch, capsys):
+    def test_missing_api_key_returns_error(self, monkeypatch, caplog):
         # 対象: main
-        # パターン: OPENAI_API_KEY未設定時、終了コード1とエラーメッセージを返す
+        # パターン: OPENAI_API_KEY未設定時、終了コード1とERRORログを返す
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
-        exit_code = ood.main()
+        with caplog.at_level(logging.ERROR):
+            exit_code = ood.main()
         assert exit_code == 1
-        assert "OPENAI_API_KEY" in capsys.readouterr().err
+        assert "OPENAI_API_KEY" in caplog.text
+        assert caplog.records[0].levelno == logging.ERROR
 
-    def test_success_writes_log_and_report(self, tmp_path, monkeypatch, capsys):
+    def test_research_api_error_returns_error_without_writing(self, tmp_path, monkeypatch, caplog):
         # 対象: main
-        # パターン: Agent実行結果を元にログ追記・レポート保存・標準出力を行い、終了コード0を返す
+        # パターン: 調査中のAPIエラー時、ログ・レポートを書かず終了コード1とERRORログを返す
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        log_path = tmp_path / "ood_report_log.md"
+        outdir = tmp_path / "output"
+        monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
+        monkeypatch.setattr(
+            ood.Runner,
+            "run_sync",
+            lambda agent, input, max_turns: _raise(_make_api_error()),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
+        )
+
+        with caplog.at_level(logging.ERROR):
+            exit_code = ood.main()
+
+        assert exit_code == 1
+        assert "調査に失敗しました" in caplog.text
+        assert "クレジットを追加" in caplog.text
+        assert not log_path.exists()
+        assert not outdir.exists()
+
+    def test_writer_api_error_keeps_log_and_returns_error(self, tmp_path, monkeypatch, caplog):
+        # 対象: main
+        # パターン: 再構成中のAPIエラー時、ログ追記は保持しレポートを書かず終了コード1を返す
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        log_path = tmp_path / "ood_report_log.md"
+        outdir = tmp_path / "output"
+        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
+        monkeypatch.setattr(ood, "build_writer_agent", lambda model: object())
+        monkeypatch.setattr(
+            ood.Runner,
+            "run_sync",
+            lambda agent, input, max_turns: type("_R", (), {"final_output": fake_report}),
+        )
+        monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: _raise(_make_api_error()))
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
+        )
+
+        with caplog.at_level(logging.ERROR):
+            exit_code = ood.main()
+
+        assert exit_code == 1
+        assert "記事の再構成に失敗しました" in caplog.text
+        # 調査結果は失われない
+        assert log_path.exists()
+        assert "v3.1.0" in log_path.read_text(encoding="utf-8")
+        assert not outdir.exists()
+
+    def test_success_writes_log_and_article(self, tmp_path, monkeypatch, capsys):
+        # 対象: main
+        # パターン: 調査→再構成の2段実行を元にログ追記・レポート保存・標準出力を行い、
+        #           終了コード0を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         log_path = tmp_path / "ood_report_log.md"
         outdir = tmp_path / "output"
         fake_report = OODReport(report_markdown="# 今回のレポート", log_entries=[_make_entry()])
-
-        class _FakeResult:
-            final_output = fake_report
-
-        monkeypatch.setattr(ood.Runner, "run_sync", lambda agent, input, max_turns: _FakeResult())
-        monkeypatch.setattr(ood, "build_agent", lambda model: object())
+        _stub_agents(monkeypatch, fake_report, "# 今回のニュースレター")
         monkeypatch.setattr(
             sys,
             "argv",
@@ -226,8 +494,60 @@ class TestMain:
         assert log_path.exists()
         report_files = list(outdir.glob("report_*.md"))
         assert len(report_files) == 1
-        assert report_files[0].read_text(encoding="utf-8") == "# 今回のレポート"
-        assert "# 今回のレポート" in capsys.readouterr().out
+        # レポートファイル・標準出力は箇条書き報告文ではなく再構成後の記事になる
+        assert report_files[0].read_text(encoding="utf-8") == "# 今回のニュースレター"
+        out = capsys.readouterr().out
+        assert "# 今回のニュースレター" in out
+        assert "# 今回のレポート" not in out
+
+    def test_writer_model_falls_back_to_model(self, tmp_path, monkeypatch):
+        # 対象: main
+        # パターン: --writer-model未指定の場合、執筆担当Agentも--modelのモデルで構築される
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
+        fake_report = OODReport(report_markdown="本文", log_entries=[])
+        models = _stub_agents(monkeypatch, fake_report, "記事")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+                "--model",
+                "gpt-test",
+            ],
+        )
+
+        assert ood.main() == 0
+        assert models == {"researcher": "gpt-test", "writer": "gpt-test"}
+
+    def test_writer_model_overrides_model(self, tmp_path, monkeypatch):
+        # 対象: main
+        # パターン: --writer-model指定時、調査担当と執筆担当で別のモデルが使われる
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        fake_report = OODReport(report_markdown="本文", log_entries=[])
+        models = _stub_agents(monkeypatch, fake_report, "記事")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+                "--model",
+                "gpt-test",
+                "--writer-model",
+                "gpt-writer",
+            ],
+        )
+
+        assert ood.main() == 0
+        assert models == {"researcher": "gpt-test", "writer": "gpt-writer"}
 
     def test_no_log_entries_does_not_create_log_file(self, tmp_path, monkeypatch):
         # 対象: main
@@ -236,12 +556,7 @@ class TestMain:
         log_path = tmp_path / "ood_report_log.md"
         outdir = tmp_path / "output"
         fake_report = OODReport(report_markdown="変更なし", log_entries=[])
-
-        class _FakeResult:
-            final_output = fake_report
-
-        monkeypatch.setattr(ood.Runner, "run_sync", lambda agent, input, max_turns: _FakeResult())
-        monkeypatch.setattr(ood, "build_agent", lambda model: object())
+        _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
             sys,
             "argv",
