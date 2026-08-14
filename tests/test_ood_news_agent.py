@@ -160,6 +160,37 @@ class TestBuildAgent:
         assert len(agent.tools) == 1
 
 
+class TestParseArguments:
+    def test_parses_cli_values(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 指定したCLI引数がNamespaceに格納される
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                "custom-log.md",
+                "--model",
+                "gpt-test",
+                "--outdir",
+                "custom-output",
+                "--window-days",
+                "7",
+                "--max-turns",
+                "12",
+            ],
+        )
+
+        args = ood.build_parser().parse_args()
+
+        assert args.log_path == "custom-log.md"
+        assert args.model == "gpt-test"
+        assert args.outdir == "custom-output"
+        assert args.window_days == 7
+        assert args.max_turns == 12
+
+
 class TestMain:
     def test_missing_api_key_returns_error(self, monkeypatch, capsys):
         # 対象: main

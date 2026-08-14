@@ -198,18 +198,14 @@ def write_report_file(outdir: Path, run_at: datetime, report_markdown: str) -> P
     return report_path
 
 
-def main() -> int:
-    """CLIエントリポイント。調査を実行し、ログ追記・レポート保存・結果表示までを行う。
+def build_parser() -> argparse.ArgumentParser:
+    """CLI引数を定義したArgumentParserを構築する。
 
-    [実装理由] 引数解析からAgent実行・ログ追記・レポート保存までを1関数にまとめているのは、これらが
-    「1回の実行」というひとまとまりの処理であり、run_at・log_path・report のような途中の値を下位関数
-    間で受け渡すよりも、直線的な処理として読める方が全体の流れを把握しやすいためである。ファイルI/O
-    やAgent構築など再利用性のある処理は個別関数に分離し、mainはその呼び出し順序の制御に専念する。ま
-    た、調査対象期間は初回実行かどうかにかかわらず既定で30日固定とし、`--window-days`(または環境変数
-    WINDOW_DAYS)を指定した場合のみ上書きするという挙動も、この関数内の設計判断として含まれる。
+    [実装理由] 引数の仕様をパース実行から分離することで、定義内容を単独で確認でき、CLI以外の
+    呼び出し元でも同じパーサを再利用できるようにする。
 
     Returns:
-        プロセス終了コード。正常終了は0、APIキー未設定時は1。
+        CLI引数が定義されたArgumentParser。
     """
     parser = argparse.ArgumentParser(description="Open OnDemand 最新情報収集エージェント")
     parser.add_argument(
@@ -234,7 +230,23 @@ def main() -> int:
         help=f"調査対象期間(日数) (既定: 環境変数 WINDOW_DAYS、未設定なら{DEFAULT_WINDOW_DAYS}日)",
     )
     parser.add_argument("--max-turns", type=int, default=40)
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    """CLIエントリポイント。調査を実行し、ログ追記・レポート保存・結果表示までを行う。
+
+    [実装理由] 引数解析からAgent実行・ログ追記・レポート保存までを1関数にまとめているのは、これらが
+    「1回の実行」というひとまとまりの処理であり、run_at・log_path・report のような途中の値を下位関数
+    間で受け渡すよりも、直線的な処理として読める方が全体の流れを把握しやすいためである。ファイルI/O
+    やAgent構築など再利用性のある処理は個別関数に分離し、mainはその呼び出し順序の制御に専念する。ま
+    た、調査対象期間は初回実行かどうかにかかわらず既定で30日固定とし、`--window-days`(または環境変数
+    WINDOW_DAYS)を指定した場合のみ上書きするという挙動も、この関数内の設計判断として含まれる。
+
+    Returns:
+        プロセス終了コード。正常終了は0、APIキー未設定時は1。
+    """
+    args = build_parser().parse_args()
 
     if not os.environ.get("OPENAI_API_KEY"):
         print(
