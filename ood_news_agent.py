@@ -528,6 +528,10 @@ def main() -> int:
 
     append_log(log_path, run_at, report.log_entries)
 
+    if not report.log_entries:
+        logger.info("新しい情報がないため、ニュースレター記事は作成しません")
+        return 0
+
     logger.info("調査結果をニュースレター記事に再構成中...")
     writer = build_writer_agent(model=args.writer_model or args.model)
     try:

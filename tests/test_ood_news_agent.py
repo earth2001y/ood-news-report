@@ -446,6 +446,35 @@ class TestComposeArticle:
         assert captured["max_turns"] == 12
 
 
+class TestMainNoNewInformation:
+    def test_skips_writing_when_research_has_no_new_information(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        # 対象: main
+        # パターン: 調査結果の項目が空の場合、執筆・出力・ファイル保存を行わず正常終了する
+        report = OODReport(report_markdown="変更なし", log_entries=[])
+        models = _stub_agents(monkeypatch, report, "記事本文")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ood_news_agent.py",
+                "--log-path",
+                str(tmp_path / "ood_report_log.md"),
+                "--outdir",
+                str(tmp_path / "output"),
+            ],
+        )
+
+        assert ood.main() == 0
+
+        assert "writer" not in models
+        assert capsys.readouterr().out == ""
+        assert not (tmp_path / "ood_report_log.md").exists()
+        assert not (tmp_path / "output").exists()
+
+
 class TestParseArguments:
     def test_parses_cli_values(self, monkeypatch):
         # 対象: build_parser
@@ -852,7 +881,7 @@ class TestMain:
         # パターン: --writer-model未指定の場合、執筆担当Agentも--modelのモデルで構築される
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
-        fake_report = OODReport(report_markdown="本文", log_entries=[])
+        fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
             sys,
@@ -875,7 +904,7 @@ class TestMain:
         # 対象: main
         # パターン: --writer-model指定時、調査担当と執筆担当で別のモデルが使われる
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        fake_report = OODReport(report_markdown="本文", log_entries=[])
+        fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
             sys,
