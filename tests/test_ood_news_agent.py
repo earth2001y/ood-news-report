@@ -31,6 +31,13 @@ class TestRenderTemplate:
         for category in ood.CATEGORIES:
             assert category in rendered
 
+    def test_instructions_requires_bracketed_status_labels(self):
+        # 対象: render_template("instructions.j2")
+        # パターン: レポート項目のステータスラベルを角括弧付きで指定する
+        rendered = ood.render_template("instructions.j2")
+        assert "「[新規]」または「[更新]」" in rendered
+        assert "半角角括弧" in rendered
+
     def test_user_input_embeds_context_variables(self):
         # 対象: render_template("user_input.j2")
         # パターン: today/window_start/window_days/existing_logが本文に埋め込まれる
