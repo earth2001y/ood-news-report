@@ -12,8 +12,8 @@ $OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは
     export OPENAI_API_KEY=sk-...
     python ood_news_agent.py
 
-    # ログファイルの場所やモデル、レポート出力先を変える場合
-    python ood_news_agent.py --log-path ./ood_report_log.md --model gpt-5.4 --outdir ./output
+    # ログ保存先やモデル、レポート出力先を変える場合
+    OUTDIR=./output LOGDIR=./logs python ood_news_agent.py --model gpt-5.4
 
     # 記事再構成だけ別のモデルで行う場合
     python ood_news_agent.py --writer-model gpt-5.4
@@ -142,6 +142,42 @@ def resolve_base_date(base_date: str | None, run_at: datetime) -> date:
         raise ValueError(
             f"基準日 {base_date!r} を解釈できません。YYYY-MM-DD 形式で指定してください。"
         ) from e
+
+
+def resolve_log_path() -> Path:
+    """ログファイルの保存先パスを決定する。
+
+    [実装理由] ログ保存先をCLI引数で変えられる仕組みは、運用が不安定になりやすく、同じ環境で
+    実行される複数プロセスがログを混ぜてしまうリスクがある。環境変数 LOGDIR を使うことで、実行
+    環境ごとに保存先を切り替えやすくし、デフォルト値 `log` に統一することで簡潔な運用にしている。
+    ディレクトリが未作成でも自動で作るのは、ログの出力先が事前に存在しないことが多く、手動作成を
+    必要とすると再実行のたびに失敗するためである。
+
+    Returns:
+        ログファイルのパス。ディレクトリは自動作成する。
+    """
+    log_dir = Path(os.environ.get("LOGDIR", "log")).expanduser()
+    if not log_dir.is_absolute():
+        log_dir = Path.cwd() / log_dir
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / "ood_report_log.md"
+
+
+def resolve_outdir() -> Path:
+    """レポート出力ディレクトリを決定する。
+
+    [実装理由] 出力先がCLIで変更可能だと、同一環境での再実行やスクリプト連携で意図しない
+    保存先へ書き出してしまう。環境変数 OUTDIR のみで制御し、未設定時は .output へ落とすことで
+    実行環境を簡潔に揃え、ディレクトリ未作成時は自動生成して失敗しないようにしている。
+
+    Returns:
+        レポートファイル保存先ディレクトリ。ディレクトリは自動作成する。
+    """
+    outdir = Path(os.environ.get("OUTDIR", "output")).expanduser()
+    if not outdir.is_absolute():
+        outdir = Path.cwd() / outdir
+    outdir.mkdir(parents=True, exist_ok=True)
+    return outdir
 
 
 def render_template(name: str, **context: object) -> str:
@@ -447,11 +483,6 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description="Open OnDemand 最新情報収集エージェント")
     parser.add_argument(
-        "--log-path",
-        default="ood_report_log.md",
-        help="報告済み項目ログのパス (既定: ./ood_report_log.md)",
-    )
-    parser.add_argument(
         "--model",
         default=os.environ.get("OOD_AGENT_MODEL", "gpt-5.4"),
         help="使用するモデル (既定: gpt-5.4。WebSearchTool対応モデルを指定すること)",
@@ -463,11 +494,6 @@ def build_parser() -> argparse.ArgumentParser:
             "記事再構成に使うWebSearchTool対応モデル "
             "(既定: 環境変数 OOD_WRITER_MODEL、未設定なら --model と同じ)"
         ),
-    )
-    parser.add_argument(
-        "--outdir",
-        default=os.environ.get("OUTDIR", "output"),
-        help="レポートファイルの出力先ディレクトリ (既定: 環境変数 OUTDIR、未設定なら ./output)",
     )
     parser.add_argument(
         "--window-days",
@@ -664,7 +690,7 @@ def finalize_report(
 
     path = persist_report(
         article_markdown,
-        Path(args.outdir),
+        resolve_outdir(),
         run_at,
     )
     if path is None:
@@ -695,7 +721,7 @@ def main() -> int:
         )
         return 1
 
-    log_path = Path(args.log_path)
+    log_path = resolve_log_path()
     run_at = datetime.now()
     try:
         base_date = resolve_base_date(args.base_date, run_at)

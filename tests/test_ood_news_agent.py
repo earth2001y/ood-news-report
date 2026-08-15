@@ -19,7 +19,14 @@ from ood_news_agent import OODArticle, OODReport, ReportItem
 @pytest.fixture(autouse=True)
 def _clear_optional_env(monkeypatch):
     """実行環境の任意設定がテスト結果に影響しないよう、未設定(既定値)の状態に揃える。"""
-    for name in ("OOD_LOG_LEVEL", "BASE_DATE", "WINDOW_DAYS", "SLACK_WEBHOOK_URL"):
+    for name in (
+        "OOD_LOG_LEVEL",
+        "BASE_DATE",
+        "WINDOW_DAYS",
+        "SLACK_WEBHOOK_URL",
+        "LOGDIR",
+        "OUTDIR",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -558,17 +565,8 @@ class TestMainNoNewInformation:
         report = OODReport(report_markdown="変更なし", log_entries=[])
         models = _stub_agents(monkeypatch, report, "記事本文")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "ood_report_log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
-            ],
-        )
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
         assert ood.main() == 0
 
@@ -587,14 +585,10 @@ class TestParseArguments:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                "custom-log.md",
                 "--model",
                 "gpt-test",
                 "--writer-model",
                 "gpt-writer",
-                "--outdir",
-                "custom-output",
                 "--window-days",
                 "7",
                 "--base-date",
@@ -606,10 +600,8 @@ class TestParseArguments:
 
         args = ood.build_parser().parse_args()
 
-        assert args.log_path == "custom-log.md"
         assert args.model == "gpt-test"
         assert args.writer_model == "gpt-writer"
-        assert args.outdir == "custom-output"
         assert args.window_days == 7
         assert args.base_date == "2026-07-31"
         assert args.max_turns == 12
@@ -653,6 +645,20 @@ class TestParseArguments:
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
 
+    def test_outdir_is_not_a_cli_argument(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: OUTDIR は環境変数でのみ指定し、CLI引数では受け付けない
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--outdir", "custom-output"])
+        with pytest.raises(SystemExit):
+            ood.build_parser().parse_args()
+
+    def test_logdir_is_not_a_cli_argument(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: LOGDIR は環境変数でのみ指定し、CLI引数では受け付けない
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--logdir", "custom-logs"])
+        with pytest.raises(SystemExit):
+            ood.build_parser().parse_args()
+
     def test_log_level_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --log-level未指定かつ環境変数なしの場合、None(=既定値扱い)になる
@@ -679,6 +685,28 @@ class TestParseArguments:
         # パターン: --dry-runを指定するとドライランが有効になる
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--dry-run"])
         assert ood.build_parser().parse_args().dry_run is True
+
+    def test_resolve_log_path_uses_default_log_directory(self, monkeypatch, tmp_path):
+        # 対象: resolve_log_path
+        # パターン: LOGDIR未設定時は log ディレクトリを使い、存在しないなら作成する
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("LOGDIR", raising=False)
+
+        log_path = ood.resolve_log_path()
+
+        assert log_path == tmp_path / "log" / "ood_report_log.md"
+        assert log_path.parent.is_dir()
+
+    def test_resolve_log_path_uses_environment_directory(self, monkeypatch, tmp_path):
+        # 対象: resolve_log_path
+        # パターン: LOGDIRを指定したとき、そのディレクトリ配下にログを出力する
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("LOGDIR", "custom-logs")
+
+        log_path = ood.resolve_log_path()
+
+        assert log_path == tmp_path / "custom-logs" / "ood_report_log.md"
+        assert log_path.parent.is_dir()
 
 
 class TestDescribeApiError:
@@ -723,7 +751,9 @@ class TestMain:
         # パターン: ドライランでも調査・記事再構成を実行し、記事は標準出力だけに出す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
-        log_path = tmp_path / "log.md"
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
         fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "# 記事本文")
@@ -738,10 +768,6 @@ class TestMain:
             [
                 "ood_news_agent.py",
                 "--dry-run",
-                "--log-path",
-                str(log_path),
-                "--outdir",
-                str(outdir),
             ],
         )
 
@@ -761,6 +787,8 @@ class TestMain:
         # パターン: Slack Webhook URL指定時、保存した記事本文を投稿する
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         captured = {}
@@ -770,17 +798,7 @@ class TestMain:
             captured["article_markdown"] = article_markdown
 
         monkeypatch.setattr(ood, "post_to_slack", _post_to_slack)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
-            ],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
         assert ood.main() == 0
 
@@ -793,6 +811,8 @@ class TestMain:
         # 対象: main
         # パターン: --base-date指定時、その日を終端とする期間が調査担当Agentに渡る
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         captured_input = {}
 
         empty_report = OODReport(report_markdown="本文", log_entries=[])
@@ -810,10 +830,6 @@ class TestMain:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
                 "--base-date",
                 "2026-07-31",
                 "--window-days",
@@ -834,7 +850,9 @@ class TestMain:
         # 対象: main
         # パターン: 基準日を過去にしても、ファイル名とログ見出しは実行日時のまま
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        log_path = tmp_path / "log.md"
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
         fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
@@ -843,10 +861,6 @@ class TestMain:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                str(log_path),
-                "--outdir",
-                str(outdir),
                 "--base-date",
                 "2020-01-01",
             ],
@@ -870,8 +884,10 @@ class TestMain:
         # 対象: main
         # パターン: 基準日の書式が不正な場合、Agentを実行せず終了コード1とERRORログを返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        log_path = tmp_path / "log.md"
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
+        monkeypatch.setenv("OUTDIR", str(outdir))
 
         def _must_not_run(agent, input, max_turns):
             raise AssertionError("基準日が不正なのにAgentが実行された")
@@ -882,10 +898,6 @@ class TestMain:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                str(log_path),
-                "--outdir",
-                str(outdir),
                 "--base-date",
                 "2026/07/31",
             ],
@@ -902,19 +914,11 @@ class TestMain:
         # 対象: main
         # パターン: 既定のWARNINGでは、標準出力は記事のみで進捗ログが出ない
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
-            ],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
         assert ood.main() == 0
 
@@ -928,6 +932,8 @@ class TestMain:
         # 対象: main
         # パターン: --log-level INFO指定時、進捗と完了報告が標準エラー出力に出る
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
@@ -935,10 +941,6 @@ class TestMain:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
                 "--log-level",
                 "INFO",
             ],
@@ -957,6 +959,8 @@ class TestMain:
         # 対象: main
         # パターン: 不正なログレベルでも処理を中断せず、警告を出して正常終了する
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(report_markdown="報告文", log_entries=[])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
@@ -964,10 +968,6 @@ class TestMain:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
                 "--log-level",
                 "VERBOSE",
             ],
@@ -992,7 +992,9 @@ class TestMain:
         # 対象: main
         # パターン: 調査中のAPIエラー時、ログ・レポートを書かず終了コード1とERRORログを返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        log_path = tmp_path / "ood_report_log.md"
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
         monkeypatch.setattr(
@@ -1000,11 +1002,7 @@ class TestMain:
             "run_sync",
             lambda agent, input, max_turns: _raise(_make_api_error()),
         )
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
         exit_code = ood.main()
 
@@ -1019,7 +1017,9 @@ class TestMain:
         # 対象: main
         # パターン: 再構成中のAPIエラー時、ログ追記は保持しレポートを書かず終了コード1を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        log_path = tmp_path / "ood_report_log.md"
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
         fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
@@ -1030,11 +1030,7 @@ class TestMain:
             lambda agent, input, max_turns: type("_R", (), {"final_output": fake_report}),
         )
         monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: _raise(_make_api_error()))
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
         exit_code = ood.main()
 
@@ -1050,15 +1046,13 @@ class TestMain:
         # パターン: 調査→再構成の2段実行を元にログ追記・レポート保存・標準出力を行い、
         #           終了コード0を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        log_path = tmp_path / "ood_report_log.md"
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
         fake_report = OODReport(report_markdown="# 今回のレポート", log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 今回のニュースレター")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
         exit_code = ood.main()
 
@@ -1076,6 +1070,8 @@ class TestMain:
         # 対象: main
         # パターン: --writer-model未指定の場合、執筆担当Agentも--modelのモデルで構築される
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
         fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
@@ -1084,10 +1080,6 @@ class TestMain:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
                 "--model",
                 "gpt-test",
             ],
@@ -1104,6 +1096,8 @@ class TestMain:
         # 対象: main
         # パターン: --writer-model指定時、調査担当と執筆担当で別のモデルが使われる
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
@@ -1111,10 +1105,6 @@ class TestMain:
             "argv",
             [
                 "ood_news_agent.py",
-                "--log-path",
-                str(tmp_path / "log.md"),
-                "--outdir",
-                str(tmp_path / "output"),
                 "--model",
                 "gpt-test",
                 "--writer-model",
@@ -1133,15 +1123,12 @@ class TestMain:
         # 対象: main
         # パターン: log_entriesが空の場合、ログファイルは作成されず終了コード0を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        log_path = tmp_path / "ood_report_log.md"
-        outdir = tmp_path / "output"
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_path = tmp_path / "logs" / "ood_report_log.md"
         fake_report = OODReport(report_markdown="変更なし", log_entries=[])
         _stub_agents(monkeypatch, fake_report, "記事")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["ood_news_agent.py", "--log-path", str(log_path), "--outdir", str(outdir)],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
         exit_code = ood.main()
 

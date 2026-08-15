@@ -15,8 +15,8 @@ Web検索で収集し、日本語で報告するエージェントです。
 期間の終端となる基準日は既定で実行日ですが、`--base-date` で過去や未来の日付を
 指定できます。
 
-実行するたびに `ood_report_log.md`(報告済み項目ログ)と今回の調査結果を
-照合し、完全に新規の情報は「新規」、既報告項目に進展・変更があれば
+実行するたびに `LOGDIR` で指定したディレクトリ配下の `ood_report_log.md`(報告済み項目ログ)と
+今回の調査結果を照合し、完全に新規の情報は「新規」、既報告項目に進展・変更があれば
 「更新」として何が変わったかを明記して報告します。変更のない既報告項目は
 再報告しません。該当情報がないカテゴリは「変更なし」と明記します。
 
@@ -57,10 +57,10 @@ python ood_news_agent.py
 
 | オプション | デフォルト | 説明 |
 | --- | --- | --- |
-| `--log-path` | `ood_report_log.md` | 報告済み項目ログのパス |
+| `LOGDIR` | `.log` | 報告済み項目ログの保存ディレクトリ(環境変数のみ) |
 | `--model` | `gpt-5.4` | 使用するモデル(WebSearchTool対応のResponses APIモデル) |
 | `--writer-model` | 環境変数 `OOD_WRITER_MODEL`、未設定なら `--model` と同じ | 記事再構成に使うモデル(WebSearchTool対応モデル) |
-| `--outdir` | 環境変数 `OUTDIR`、未設定なら `output` | レポートファイルの出力先ディレクトリ |
+| `OUTDIR` | `output` | レポートファイルの出力先ディレクトリ(環境変数のみ) |
 | `--window-days` | 環境変数 `WINDOW_DAYS`、未設定なら `30` | 調査対象期間(日数) |
 | `--base-date` | 環境変数 `BASE_DATE`、未設定なら実行日 | 調査対象期間の基準日(`YYYY-MM-DD`)。この日を終端とする |
 | `--log-level` | 環境変数 `OOD_LOG_LEVEL`、未設定なら `WARNING` | ログの出力レベル(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`) |
@@ -116,8 +116,8 @@ python ood_news_agent.py --log-level INFO 2>/dev/null > report.md
 ### ドライラン
 
 `--dry-run` を指定すると、通常どおりOpenAI APIを呼び出して調査と記事再構成を行いますが、
-`ood_report_log.md` への追記、レポートファイルの保存、Slackへの投稿は行いません。再構成した記事は
-標準出力に表示されるため、保存前に内容を確認する用途に使えます。
+`LOGDIR` 配下の `ood_report_log.md` への追記、レポートファイルの保存、Slackへの投稿は行いません。
+再構成した記事は標準出力に表示されるため、保存前に内容を確認する用途に使えます。
 
 ```bash
 python ood_news_agent.py --dry-run
@@ -130,7 +130,8 @@ python ood_news_agent.py --dry-run
 - `$OUTDIR/report_YYYYMMDD_HHMM.md`: 標準出力と同じ記事本文を実行ごとに
   ファイルとしても保存する(ディレクトリが存在しない場合は自動作成)
   (フォーマットの詳細は [docs/report_file_format.md](docs/report_file_format.md) 参照)
-- `ood_report_log.md`: 今回「新規」「更新」として報告した項目が実行日時ごとに追記される。
+- `$LOGDIR/ood_report_log.md`: 今回「新規」「更新」として報告した項目が実行日時ごとに追記される。
+  ディレクトリが存在しない場合は自動作成され、既定値は `.log` である。
   記事ではなく調査担当Agentの構造化出力をそのまま記録するため、形式は従来から変わらない
   (フォーマットの詳細は [docs/ood_report_log_format.md](docs/ood_report_log_format.md) 参照)
 
