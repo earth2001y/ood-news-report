@@ -545,53 +545,21 @@ def describe_api_error(error: APIError) -> str:
     return f"{hint}\n(APIからの応答: {error.message})"
 
 
-def main() -> int:
-    """CLIエントリポイント。調査・記事再構成を実行し、必要に応じて結果を永続化する。
+def run_researcher_agent(
+    args: argparse.Namespace,
+    *,
+    existing_log: str,
+    base_date: date,
+    window_start: date,
+    window_days: int,
+) -> OODReport | None:
+    """調査担当Agentを実行し、結果を返す。
 
-    [実装理由] 引数解析からAgent実行・ログ追記・レポート保存までを1関数にまとめているのは、これらが
-    「1回の実行」というひとまとまりの処理であり、run_at・log_path・report のような途中の値を下位関数
-    間で受け渡すよりも、直線的な処理として読める方が全体の流れを把握しやすいためである。ファイルI/O
-    やAgent構築など再利用性のある処理は個別関数に分離し、mainはその呼び出し順序の制御に専念する。ま
-    た、調査対象期間は初回実行かどうかにかかわらず既定で30日固定とし、`--window-days`(または環境変数
-    WINDOW_DAYS)を指定した場合のみ上書きするという挙動も、この関数内の設計判断として含まれる。
-    ログ追記を記事再構成より先に行うのは、ログの内容が調査担当Agentの構造化出力だけで確定しており、
-    再構成が失敗しても収集済みの調査結果を失わないようにするためである。Agent実行を try/except で
-    囲んでいるのは、API側の失敗(残高不足、キーの誤り、モデル名の誤りなど)はCLI利用者が対処できる
-    運用上のエラーであり、スタックトレースではなく対処方法を示すべきものだからである。進捗と完了
-    報告をINFOで出しているのは、既定のWARNINGでは記事本文とエラーだけが残り、パイプで他のコマンドへ
-    渡す用途を妨げないようにするためである(記事本文のみ標準出力、ログは標準エラー出力に出す)。
-    調査対象期間の基準日(base_date)とファイル名・ログ見出しに使う実行日時(run_at)を別の値として
-    保持しているのは、`--base-date` で過去を基準に調査したときも「いつ実行した分か」の記録は実行
-    日時のままにしておくべきであり、同じ基準日で複数回実行してもレポートファイルが衝突しないように
-    するためである。
-
-    Returns:
-        プロセス終了コード。正常終了は0、APIキー未設定時・基準日の書式不正時・API呼び出し失敗時は1。
+    [実装理由] main から API 呼び出しと入力構築を切り出すことで、調査の条件と失敗処理が
+    別の関数で見通しよく保守できるようにしている。これにより main は制御フローに集中し、
+    80 行を超えない長さを維持できる。
     """
-    args = build_parser().parse_args()
-
-    setup_logging(args.log_level)
-
-    if not os.environ.get("OPENAI_API_KEY"):
-        logger.error(
-            "環境変数 OPENAI_API_KEY が設定されていません。"
-            "export OPENAI_API_KEY=sk-... を実行するか、.env ファイルに設定してください。"
-        )
-        return 1
-
-    log_path = Path(args.log_path)
-    run_at = datetime.now()
-    try:
-        base_date = resolve_base_date(args.base_date, run_at)
-    except ValueError as e:
-        logger.error("%s", e)
-        return 1
-    window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
-    window_start = base_date - timedelta(days=window_days)
-    existing_log = load_log(log_path)
-
     researcher = build_researcher_agent(model=args.model)
-
     user_input = render_template(
         "researcher_input.j2",
         base_date=base_date.isoformat(),
@@ -599,31 +567,58 @@ def main() -> int:
         window_days=window_days,
         existing_log=existing_log,
     )
-
     period = f"{window_start.isoformat()} 〜 {base_date.isoformat()}"
     logger.info("Open OnDemand の最新情報を調査中... (対象期間: %s)", period)
-
     try:
         result = Runner.run_sync(researcher, input=user_input, max_turns=args.max_turns)
     except APIError as e:
         logger.error("調査に失敗しました。%s", describe_api_error(e))
-        return 1
-    report: OODReport = result.final_output
+        return None
+    return result.final_output
 
-    if not args.dry_run:
-        append_log(
-            log_path,
-            run_at,
-            report.log_entries,
-            window_start=window_start.isoformat(),
-            base_date=base_date.isoformat(),
-            window_days=window_days,
-        )
 
-    if not report.log_entries:
-        logger.info("新しい情報がないため、ニュースレター記事は作成しません")
-        return 0
+def persist_report(
+    article_markdown: str,
+    *,
+    outdir: Path,
+    run_at: datetime,
+) -> Path | None:
+    """記事をファイルへ保存し、設定があればSlackへ通知する。
 
+    [実装理由] 永続化処理を独立した関数に切り出して、finalize_report の分岐を浅く保つ。
+    Slack 連携の失敗もこの関数で吸収し、上位の関数は「保存できたかどうか」の判定だけを知れば
+    よいようにしている。
+    """
+    report_path = write_report_file(outdir, run_at, article_markdown)
+    slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+    if not slack_webhook_url:
+        return report_path
+
+    logger.info("レポートをSlackへ投稿中...")
+    try:
+        post_to_slack(slack_webhook_url, article_markdown)
+    except (HTTPError, URLError, RuntimeError, TimeoutError) as e:
+        logger.error("Slackへの投稿に失敗しました: %s", e)
+        return None
+    return report_path
+
+
+def finalize_report(
+    args: argparse.Namespace,
+    report: OODReport,
+    *,
+    log_path: Path,
+    run_at: datetime,
+    base_date: date,
+    window_start: date,
+    window_days: int,
+) -> tuple[str, Path | None] | None:
+    """調査結果を記事へ再構成し、保存とSlack通知を行う。
+
+    [実装理由] 執筆担当Agentの実行、レポート保存、Slack通知をまとめて管理し、
+    main がこれらの詳細を知らなくて済むようにしている。再構成失敗時もログに保持済みの
+    調査結果を残しながら、CLI終了コードを返せるようにしている。
+    """
     logger.info("調査結果をニュースレター記事に再構成中...")
     target_categories = [
         category
@@ -651,26 +646,92 @@ def main() -> int:
             describe_api_error(e),
             log_path,
         )
+        return None
+
+    if args.dry_run:
+        print(article_markdown)
+        logger.info("ドライランのため、ログ追記・レポート保存・Slack投稿を行いません")
+        return article_markdown, None
+
+    report_path = persist_report(
+        article_markdown,
+        outdir=Path(args.outdir),
+        run_at=run_at,
+    )
+    if report_path is None:
+        return None
+
+    print(article_markdown)
+    logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.log_entries))
+    logger.info("レポートを %s に保存しました", report_path)
+    return article_markdown, report_path
+
+
+def main() -> int:
+    """CLIエントリポイント。調査・記事再構成を実行し、必要に応じて結果を永続化する。
+
+    [実装理由] 実行順序の制御だけをこの関数に残し、各処理の詳細はヘルパー関数に分離している。
+    これにより、CLI の入口としての責務が明確になり、各処理の単体テストや保守がしやすくなる。
+
+    Returns:
+        プロセス終了コード。正常終了は0、APIキー未設定時・基準日の書式不正時・API呼び出し失敗時は1。
+    """
+    args = build_parser().parse_args()
+    setup_logging(args.log_level)
+
+    if not os.environ.get("OPENAI_API_KEY"):
+        logger.error(
+            "環境変数 OPENAI_API_KEY が設定されていません。"
+            "export OPENAI_API_KEY=sk-... を実行するか、.env ファイルに設定してください。"
+        )
+        return 1
+
+    log_path = Path(args.log_path)
+    run_at = datetime.now()
+    try:
+        base_date = resolve_base_date(args.base_date, run_at)
+    except ValueError as e:
+        logger.error("%s", e)
+        return 1
+
+    window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
+    window_start = base_date - timedelta(days=window_days)
+    existing_log = load_log(log_path)
+    report = run_researcher_agent(
+        args,
+        existing_log=existing_log,
+        base_date=base_date,
+        window_start=window_start,
+        window_days=window_days,
+    )
+    if report is None:
         return 1
 
     if not args.dry_run:
-        report_path = write_report_file(Path(args.outdir), run_at, article_markdown)
+        append_log(
+            log_path,
+            run_at,
+            report.log_entries,
+            window_start=window_start.isoformat(),
+            base_date=base_date.isoformat(),
+            window_days=window_days,
+        )
 
-        slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
-        if slack_webhook_url:
-            logger.info("レポートをSlackへ投稿中...")
-            try:
-                post_to_slack(slack_webhook_url, article_markdown)
-            except (HTTPError, URLError, RuntimeError, TimeoutError) as e:
-                logger.error("Slackへの投稿に失敗しました: %s", e)
-                return 1
-
-    print(article_markdown)
-    if args.dry_run:
-        logger.info("ドライランのため、ログ追記・レポート保存・Slack投稿を行いません")
+    if not report.log_entries:
+        logger.info("新しい情報がないため、ニュースレター記事は作成しません")
         return 0
-    logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.log_entries))
-    logger.info("レポートを %s に保存しました", report_path)
+
+    article_result = finalize_report(
+        args,
+        report,
+        log_path=log_path,
+        run_at=run_at,
+        base_date=base_date,
+        window_start=window_start,
+        window_days=window_days,
+    )
+    if article_result is None:
+        return 1
     return 0
 
 
