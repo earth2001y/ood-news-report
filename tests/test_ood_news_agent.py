@@ -319,7 +319,7 @@ class TestAppendLog:
         # 対象: append_log
         # パターン: entriesが空の場合、ファイルを作成しない
         log_path = tmp_path / "ood_report_log.md"
-        ood.append_log(log_path, datetime(2026, 8, 13, 9, 30), [])
+        ood.append_log(log_path, datetime(2026, 8, 13, 9, 30), [], "2026-07-14", "2026-08-13", 30)
         assert not log_path.exists()
 
     def test_creates_file_with_header_when_absent(self, tmp_path):
@@ -330,9 +330,9 @@ class TestAppendLog:
             log_path,
             datetime(2026, 8, 13, 9, 30),
             [_make_entry()],
-            window_start="2026-07-14",
-            base_date="2026-08-13",
-            window_days=30,
+            "2026-07-14",
+            "2026-08-13",
+            30,
         )
         text = log_path.read_text(encoding="utf-8")
         assert text.startswith("# Open OnDemand 情報収集 報告ログ\n")
@@ -352,9 +352,9 @@ class TestAppendLog:
             log_path,
             datetime(2026, 8, 13, 10, 0),
             [_make_entry(item_date="")],
-            window_start="2026-07-14",
-            base_date="2026-08-13",
-            window_days=30,
+            "2026-07-14",
+            "2026-08-13",
+            30,
         )
         text = log_path.read_text(encoding="utf-8")
         assert text.count("# Open OnDemand 情報収集 報告ログ") == 1
@@ -369,7 +369,14 @@ class TestAppendLog:
             _make_entry(category="コミュニティイベント", title="GOOD Conference 2026"),
             _make_entry(category="新バージョンのリリース情報", title="v3.1.0"),
         ]
-        ood.append_log(log_path, datetime(2026, 8, 13, 9, 30), entries)
+        ood.append_log(
+            log_path,
+            datetime(2026, 8, 13, 9, 30),
+            entries,
+            "2026-07-14",
+            "2026-08-13",
+            30,
+        )
         text = log_path.read_text(encoding="utf-8")
         assert text.index("新バージョンのリリース情報") < text.index("コミュニティイベント")
 
@@ -378,7 +385,14 @@ class TestAppendLog:
         # パターン: status="更新"の項目が[更新]ラベル付きで出力される
         log_path = tmp_path / "ood_report_log.md"
         entry = _make_entry(status="更新", change_note="深刻度がCriticalに変更")
-        ood.append_log(log_path, datetime(2026, 8, 13, 9, 30), [entry])
+        ood.append_log(
+            log_path,
+            datetime(2026, 8, 13, 9, 30),
+            [entry],
+            "2026-07-14",
+            "2026-08-13",
+            30,
+        )
         text = log_path.read_text(encoding="utf-8")
         assert "[更新] v3.1.0" in text
 

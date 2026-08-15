@@ -82,7 +82,7 @@ _jinja_env = Environment(
 )
 
 
-def setup_logging(level_name: str | None) -> int:
+def setup_logging(level_name: str | None = DEFAULT_LOG_LEVEL) -> int:
     """ロガーの出力レベルを設定する。
 
     [実装理由] ログレベルをCLIオプションと環境変数の両方で指定できるようにしつつ、その解決と
@@ -219,7 +219,7 @@ def build_researcher_agent(model: str) -> Agent:
     )
 
 
-def build_writer_agent(model: str, categories: list[str] | None = None) -> Agent:
+def build_writer_agent(model: str, categories: list[str] | None = CATEGORIES) -> Agent:
     """調査結果をニュースレター記事へ再構成するAgentを構築する。
 
     [実装理由] 調査担当Agentの出力は箇条書き中心の報告文であり、読み物としての流れを欠く。
@@ -273,7 +273,7 @@ def compose_article(
     Returns:
         再構成された記事本文(Markdown)。
     """
-    writer_input = render_template(
+    prompt = render_template(
         "writer_input.j2",
         base_date=base_date,
         window_start=window_start,
@@ -281,7 +281,7 @@ def compose_article(
         entries=report.log_entries,
         report_markdown=report.report_markdown,
     )
-    result = Runner.run_sync(writer, input=writer_input, max_turns=max_turns)
+    result = Runner.run_sync(writer, input=prompt, max_turns=max_turns)
     article: OODArticle = result.final_output
     return article.article_markdown
 
@@ -310,10 +310,9 @@ def append_log(
     log_path: Path,
     run_at: datetime,
     entries: list[ReportItem],
-    *,
-    window_start: str | None = None,
-    base_date: str | None = None,
-    window_days: int | None = None,
+    window_start: str,
+    base_date: str,
+    window_days: int,
 ) -> None:
     """今回「新規」「更新」と判定された項目をログファイルに追記する。
 
@@ -328,9 +327,9 @@ def append_log(
         log_path: ood_report_log.md のパス。
         run_at: 実行日時。追記セクションの見出し(YYYY-MM-DD HH:MM)に使う。
         entries: 今回「新規」または「更新」として報告した項目のリスト。
-        window_start: 調査期間の開始日(YYYY-MM-DD)。Noneの場合は記録しない。
-        base_date: 調査期間の終端日(YYYY-MM-DD)。Noneの場合は記録しない。
-        window_days: 調査期間の日数。Noneの場合は記録しない。
+        window_start: 調査期間の開始日(YYYY-MM-DD)。
+        base_date: 調査期間の終端日(YYYY-MM-DD)。
+        window_days: 調査期間の日数。
 
     Returns:
         None
@@ -338,8 +337,7 @@ def append_log(
     if not entries:
         return
     lines = [f"\n## {run_at.strftime('%Y-%m-%d %H:%M')} 実行分\n"]
-    if window_start is not None and base_date is not None and window_days is not None:
-        lines.append(f"対象期間: {window_start} 〜 {base_date} ({window_days}日間)\n\n")
+    lines.append(f"対象期間: {window_start} 〜 {base_date} ({window_days}日間)\n\n")
     for cat in CATEGORIES:
         cat_entries = [e for e in entries if e.category == cat]
         if not cat_entries:
@@ -379,9 +377,9 @@ def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> 
         書き込んだファイルのパス。
     """
     outdir.mkdir(parents=True, exist_ok=True)
-    report_path = outdir / f"report_{run_at.strftime('%Y%m%d_%H%M')}.md"
-    report_path.write_text(article_markdown, encoding="utf-8")
-    return report_path
+    path = outdir / f"report_{run_at.strftime('%Y%m%d_%H%M')}.md"
+    path.write_text(article_markdown, encoding="utf-8")
+    return path
 
 
 def post_to_slack(webhook_url: str, article_markdown: str) -> None:
@@ -547,7 +545,6 @@ def describe_api_error(error: APIError) -> str:
 
 def run_researcher_agent(
     args: argparse.Namespace,
-    *,
     existing_log: str,
     base_date: date,
     window_start: date,
@@ -560,7 +557,7 @@ def run_researcher_agent(
     80 行を超えない長さを維持できる。
     """
     researcher = build_researcher_agent(model=args.model)
-    user_input = render_template(
+    prompt = render_template(
         "researcher_input.j2",
         base_date=base_date.isoformat(),
         window_start=window_start.isoformat(),
@@ -570,7 +567,7 @@ def run_researcher_agent(
     period = f"{window_start.isoformat()} 〜 {base_date.isoformat()}"
     logger.info("Open OnDemand の最新情報を調査中... (対象期間: %s)", period)
     try:
-        result = Runner.run_sync(researcher, input=user_input, max_turns=args.max_turns)
+        result = Runner.run_sync(researcher, input=prompt, max_turns=args.max_turns)
     except APIError as e:
         logger.error("調査に失敗しました。%s", describe_api_error(e))
         return None
@@ -579,7 +576,6 @@ def run_researcher_agent(
 
 def persist_report(
     article_markdown: str,
-    *,
     outdir: Path,
     run_at: datetime,
 ) -> Path | None:
@@ -589,45 +585,43 @@ def persist_report(
     Slack 連携の失敗もこの関数で吸収し、上位の関数は「保存できたかどうか」の判定だけを知れば
     よいようにしている。
     """
-    report_path = write_report_file(outdir, run_at, article_markdown)
-    slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
-    if not slack_webhook_url:
-        return report_path
+    path = write_report_file(outdir, run_at, article_markdown)
+    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+    if not webhook_url:
+        return path
 
     logger.info("レポートをSlackへ投稿中...")
     try:
-        post_to_slack(slack_webhook_url, article_markdown)
+        post_to_slack(webhook_url, article_markdown)
     except (HTTPError, URLError, RuntimeError, TimeoutError) as e:
         logger.error("Slackへの投稿に失敗しました: %s", e)
         return None
-    return report_path
+    return path
 
 
-def finalize_report(
+def run_writer_agent(
     args: argparse.Namespace,
     report: OODReport,
-    *,
     log_path: Path,
-    run_at: datetime,
+    model: str,
     base_date: date,
     window_start: date,
     window_days: int,
-) -> tuple[str, Path | None] | None:
-    """調査結果を記事へ再構成し、保存とSlack通知を行う。
+) -> str | None:
+    """調査結果を執筆担当Agentで記事へ再構成する。
 
-    [実装理由] 執筆担当Agentの実行、レポート保存、Slack通知をまとめて管理し、
-    main がこれらの詳細を知らなくて済むようにしている。再構成失敗時もログに保持済みの
-    調査結果を残しながら、CLI終了コードを返せるようにしている。
+    [実装理由] 執筆担当Agentの作成・実行と、ファイル保存・Slack投稿を分離することで、
+    Agent実行の失敗と副作用を伴う永続化処理を独立して扱えるようにしている。
     """
     logger.info("調査結果をニュースレター記事に再構成中...")
-    target_categories = [
+    categories = [
         category
         for category in CATEGORIES
         if any(entry.category == category for entry in report.log_entries)
     ]
     writer = build_writer_agent(
-        model=args.writer_model or args.model,
-        categories=target_categories,
+        model=model,
+        categories=categories,
     )
     try:
         article_markdown = compose_article(
@@ -647,24 +641,39 @@ def finalize_report(
             log_path,
         )
         return None
+    return article_markdown
+
+
+def finalize_report(
+    args: argparse.Namespace,
+    report: OODReport,
+    log_path: Path,
+    run_at: datetime,
+    article_markdown: str,
+) -> tuple[str, Path | None] | None:
+    """記事本文を保存し、設定があればSlackへ投稿する。
+
+    [実装理由] Agent実行を終えた記事本文だけを受け取ることで、結果の生成と永続化の責務を
+    分離し、ドライラン時に副作用を確実に抑止できるようにしている。
+    """
 
     if args.dry_run:
         print(article_markdown)
         logger.info("ドライランのため、ログ追記・レポート保存・Slack投稿を行いません")
         return article_markdown, None
 
-    report_path = persist_report(
+    path = persist_report(
         article_markdown,
-        outdir=Path(args.outdir),
-        run_at=run_at,
+        Path(args.outdir),
+        run_at,
     )
-    if report_path is None:
+    if path is None:
         return None
 
     print(article_markdown)
     logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.log_entries))
-    logger.info("レポートを %s に保存しました", report_path)
-    return article_markdown, report_path
+    logger.info("レポートを %s に保存しました", path)
+    return article_markdown, path
 
 
 def main() -> int:
@@ -699,10 +708,10 @@ def main() -> int:
     existing_log = load_log(log_path)
     report = run_researcher_agent(
         args,
-        existing_log=existing_log,
-        base_date=base_date,
-        window_start=window_start,
-        window_days=window_days,
+        existing_log,
+        base_date,
+        window_start,
+        window_days,
     )
     if report is None:
         return 1
@@ -712,25 +721,36 @@ def main() -> int:
             log_path,
             run_at,
             report.log_entries,
-            window_start=window_start.isoformat(),
-            base_date=base_date.isoformat(),
-            window_days=window_days,
+            window_start.isoformat(),
+            base_date.isoformat(),
+            window_days,
         )
 
     if not report.log_entries:
         logger.info("新しい情報がないため、ニュースレター記事は作成しません")
         return 0
 
-    article_result = finalize_report(
+    writer_model = args.writer_model or args.model
+    article_markdown = run_writer_agent(
         args,
         report,
-        log_path=log_path,
-        run_at=run_at,
-        base_date=base_date,
-        window_start=window_start,
-        window_days=window_days,
+        log_path,
+        writer_model,
+        base_date,
+        window_start,
+        window_days,
     )
-    if article_result is None:
+    if article_markdown is None:
+        return 1
+
+    result = finalize_report(
+        args,
+        report,
+        log_path,
+        run_at,
+        article_markdown,
+    )
+    if result is None:
         return 1
     return 0
 
