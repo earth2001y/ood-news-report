@@ -193,12 +193,26 @@ class TestRenderTemplate:
         for category in ood.CATEGORIES:
             assert category in rendered
 
-    def test_instructions_requires_bracketed_status_labels(self):
+    def test_researcher_instructions_uses_structured_entries_only(self):
         # 対象: render_template("researcher_instructions.j2")
-        # パターン: レポート項目のステータスラベルを角括弧付きで指定する
+        # パターン: 調査担当の出力形式がlog_entriesだけを要求する
         rendered = ood.render_template("researcher_instructions.j2")
-        assert "「[新規]」または「[更新]」" in rendered
-        assert "半角角括弧" in rendered
+        assert "【出力形式(log_entries)】" in rendered
+        assert "report_markdown" not in rendered
+
+    def test_report_markdown_renders_entries_and_unchanged_categories(self):
+        # 対象: render_template("report_markdown.j2")
+        # パターン: log_entriesから項目を分類し、空カテゴリは「変更なし」とする
+        rendered = ood.render_template(
+            "report_markdown.j2",
+            categories=ood.CATEGORIES,
+            entries=[_make_entry(status="更新", change_note="深刻度がCriticalに変更")],
+        )
+        assert "## 新バージョンのリリース情報" in rendered
+        assert "- [更新] v3.1.0 (2026-08-01) - 新機能が追加された" in rendered
+        assert "変更点: 深刻度がCriticalに変更" in rendered
+        assert "## 開発ロードマップの更新・公開" in rendered
+        assert rendered.count("変更なし") == len(ood.CATEGORIES) - 1
 
     def test_writer_instructions_lists_categories_in_order(self):
         # 対象: render_template("writer_instructions.j2")
@@ -235,14 +249,12 @@ class TestRenderTemplate:
             window_start="2026-07-14",
             window_days=30,
             entries=[_make_entry(status="更新", change_note="深刻度がCriticalに変更")],
-            report_markdown="## 新バージョンのリリース情報\n\n- [更新] v3.1.0",
         )
         assert "調査対象期間:" not in rendered
         assert "2026-07-14 〜 2026-08-13" not in rendered
         assert "v3.1.0" in rendered
         assert "https://example.com/v3.1.0" in rendered
         assert "深刻度がCriticalに変更" in rendered
-        assert "- [更新] v3.1.0" in rendered
 
     def test_writer_input_marks_empty_entries(self):
         # 対象: render_template("writer_input.j2")
@@ -253,7 +265,6 @@ class TestRenderTemplate:
             window_start="2026-07-14",
             window_days=30,
             entries=[],
-            report_markdown="変更なし",
         )
         assert "(今回の期間内に新規・更新の項目はありませんでした)" in rendered
 
@@ -266,7 +277,6 @@ class TestRenderTemplate:
             window_start="2026-07-14",
             window_days=30,
             entries=[_make_entry(item_date="")],
-            report_markdown="本文",
         )
         assert "日付: (不明)" in rendered
 
@@ -513,7 +523,7 @@ class TestComposeArticle:
             final_output = OODArticle(article_markdown="# 記事本文")
 
         monkeypatch.setattr(ood.Runner, "run_sync", lambda agent, input, max_turns: _FakeResult())
-        report = OODReport(report_markdown="- [新規] v3.1.0", log_entries=[_make_entry()])
+        report = OODReport(log_entries=[_make_entry()])
 
         article = ood.compose_article(
             object(),
@@ -528,7 +538,7 @@ class TestComposeArticle:
 
     def test_passes_entries_and_report_to_agent(self, monkeypatch):
         # 対象: compose_article
-        # パターン: 構造化項目と調査担当Agentの報告文の両方が入力に含まれる
+        # パターン: 構造化項目から生成した報告文が入力に含まれる
         captured = {}
 
         class _FakeResult:
@@ -540,7 +550,7 @@ class TestComposeArticle:
             return _FakeResult()
 
         monkeypatch.setattr(ood.Runner, "run_sync", _fake_run_sync)
-        report = OODReport(report_markdown="報告文の本文", log_entries=[_make_entry()])
+        report = OODReport(log_entries=[_make_entry()])
 
         ood.compose_article(
             object(),
@@ -552,7 +562,7 @@ class TestComposeArticle:
         )
 
         assert "v3.1.0" in captured["input"]
-        assert "報告文の本文" in captured["input"]
+        assert "## 新バージョンのリリース情報" in captured["input"]
         assert captured["max_turns"] == 12
 
 
@@ -562,7 +572,7 @@ class TestMainNoNewInformation:
     ):
         # 対象: main
         # パターン: 調査結果の項目が空の場合、執筆・出力・ファイル保存を行わず正常終了する
-        report = OODReport(report_markdown="変更なし", log_entries=[])
+        report = OODReport(log_entries=[])
         models = _stub_agents(monkeypatch, report, "記事本文")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
@@ -755,7 +765,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
-        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             ood,
@@ -789,7 +799,7 @@ class TestMain:
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         captured = {}
 
@@ -815,7 +825,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         captured_input = {}
 
-        empty_report = OODReport(report_markdown="本文", log_entries=[])
+        empty_report = OODReport(log_entries=[])
 
         def _run_sync(agent, input, max_turns):
             captured_input.setdefault("text", input)
@@ -854,7 +864,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
-        fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             sys,
@@ -916,7 +926,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
@@ -934,7 +944,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             sys,
@@ -961,7 +971,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(report_markdown="報告文", log_entries=[])
+        fake_report = OODReport(log_entries=[])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             sys,
@@ -1021,7 +1031,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
-        fake_report = OODReport(report_markdown="報告文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
         monkeypatch.setattr(ood, "build_writer_agent", lambda model, categories=None: object())
         monkeypatch.setattr(
@@ -1050,7 +1060,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         log_path = tmp_path / "logs" / "ood_report_log.md"
         outdir = tmp_path / "output"
-        fake_report = OODReport(report_markdown="# 今回のレポート", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 今回のニュースレター")
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
@@ -1073,7 +1083,7 @@ class TestMain:
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
-        fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
             sys,
@@ -1098,7 +1108,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(report_markdown="本文", log_entries=[_make_entry()])
+        fake_report = OODReport(log_entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
             sys,
@@ -1126,7 +1136,7 @@ class TestMain:
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         log_path = tmp_path / "logs" / "ood_report_log.md"
-        fake_report = OODReport(report_markdown="変更なし", log_entries=[])
+        fake_report = OODReport(log_entries=[])
         _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 

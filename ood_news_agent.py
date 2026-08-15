@@ -217,9 +217,6 @@ class ReportItem(BaseModel):
 
 
 class OODReport(BaseModel):
-    report_markdown: str = Field(
-        description="ユーザーにそのまま提示する、日本語・カテゴリ別・箇条書き中心の最終レポート本文"
-    )
     log_entries: list[ReportItem] = Field(
         description="今回『新規』または『更新』として報告した項目のみのリスト(変更なしは含めない)"
     )
@@ -235,9 +232,8 @@ def build_researcher_agent(model: str) -> Agent:
     """Open OnDemand調査用の調査担当Agentを構築する。
 
     [実装理由] WebSearchToolによるWeb検索と、構造化出力(OODReport)を組み合わせたAgentを生成する。
-    レポート本文(report_markdown)とログ追記用データ(log_entries)を出力スキーマ上で分離しているのは、
-    ログファイルへの書き込みをLLMの自由記述に委ねず、
-    呼び出し側(append_log)で確定的に行えるようにするため。
+    ログ追記用データ(log_entries)だけを出力させるのは、レポート本文をLLMの自由記述に委ねず、
+    呼び出し側で決定的に組み立てられるようにするため。
 
     Args:
         model: 使用するモデル名。WebSearchTool(Responses API)対応モデルを指定する。
@@ -293,10 +289,8 @@ def compose_article(
     """調査結果(OODReport)を執筆担当Agentに渡し、記事本文を得る。
 
     [実装理由] 執筆担当Agentへの入力組み立てと実行をmainから切り出しているのは、入力に含める情報
-    (構造化された項目一覧と調査担当Agentの報告文)の範囲がこのステップの出力品質を左右する設計上の
-    要点であり、単独で読めて単独でテストできる形にしておきたいためである。構造化データ(log_entries)
-    だけでなく report_markdown も併せて渡すのは、カテゴリごとの「変更なし」判定など、構造化データに
-    現れない調査担当Agentの判断を執筆側から参照できるようにするため。
+    (構造化された項目一覧とテンプレートで生成した報告文)の範囲がこのステップの出力品質を左右する
+    設計上の要点であり、単独で読めて単独でテストできる形にしておきたいためである。
 
     Args:
         writer: build_writer_agentで構築した執筆担当Agent。
@@ -315,7 +309,11 @@ def compose_article(
         window_start=window_start,
         window_days=window_days,
         entries=report.log_entries,
-        report_markdown=report.report_markdown,
+        report_markdown=render_template(
+            "report_markdown.j2",
+            categories=CATEGORIES,
+            entries=report.log_entries,
+        ),
     )
     result = Runner.run_sync(writer, input=prompt, max_turns=max_turns)
     article: OODArticle = result.final_output

@@ -1,0 +1,10 @@
+{% for category in categories %}
+## {{ category }}
+{% set category_entries = entries | selectattr("category", "equalto", category) | list %}
+{% if category_entries %}{% for entry in category_entries %}
+- [{{ entry.status }}] {{ entry.title }}{% if entry.item_date %} ({{ entry.item_date }}){% endif %} - {{ entry.summary }} - {{ entry.url }}{% if entry.change_note %}
+  変更点: {{ entry.change_note }}{% endif %}
+{% endfor %}{% else %}
+変更なし
+{% endif %}
+{% endfor %}

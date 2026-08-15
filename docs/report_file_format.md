@@ -6,8 +6,9 @@
 
 保存されるのは、調査担当Agentの構造化出力(`OODReport`)を執筆担当Agentが
 再構成したニュースレター記事(`OODArticle.article_markdown`)です。調査担当Agentが
-出力する箇条書き中心の報告文(`OODReport.report_markdown`)は、執筆担当Agentへの
-入力としてのみ使われ、ファイルにも標準出力にも現れません。
+出力する構造化項目(`OODReport.log_entries`)から`templates/report_markdown.j2`で
+生成する箇条書き中心の報告文は、執筆担当Agentへの入力としてのみ使われ、ファイルにも
+標準出力にも現れません。
 
 `ood_report_log.md`(既報告項目ログ、[docs/ood_report_log_format.md](ood_report_log_format.md)
 参照)とは別物です。レポートファイルは「その回の実行で得られた最終的な報告文」の
@@ -64,7 +65,7 @@ $OUTDIR/report_<YYYYMMDD>_<HHMM>.md
    - 箇条書きの羅列ではなく、地の文の解説記事として書く。
    - 各項目について、何が公開・更新されたのか、利用者にとって何が変わるのかを読み物として説明する。
    - 「更新」項目の場合は、前回からどう変わったのかが分かるように書く。
-   - 情報源のURLは、対応する記述の直後に `([出典](URL))` の形式で Markdown リンクを添える。
+    - 情報源のURLは、対応する記述の直後に「出典」リンクを添える。
 
 **全般的な要件**
 
