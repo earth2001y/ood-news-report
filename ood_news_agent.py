@@ -2,11 +2,11 @@
 """Open OnDemand の最新情報を収集し、日本語で報告するエージェント。
 
 OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を行う。実行するたびに、
-作業ディレクトリの ood_report_log.md と今回の調査結果を突き合わせ、新規・更新のみを報告し、
+    作業ディレクトリの ood_research_log.json と今回の調査結果を突き合わせ、新規・更新のみを報告し、
 ログに追記する。処理は2段構成で、調査担当Agentの構造化出力(OODReport)を執筆担当Agentが
 ニュースレター記事(OODArticle)へ再構成する。記事本文は標準出力に加えて、
 $OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは調査担当Agentの
-構造化出力(log_entries)であり、再構成の影響を受けない。
+構造化出力(entries)であり、再構成の影響を受けない。
 
 使い方:
     export OPENAI_API_KEY=sk-...
@@ -160,7 +160,7 @@ def resolve_log_path() -> Path:
     if not log_dir.is_absolute():
         log_dir = Path.cwd() / log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir / "ood_report_log.md"
+    return log_dir / "ood_research_log.json"
 
 
 def resolve_outdir() -> Path:
@@ -217,7 +217,7 @@ class ReportItem(BaseModel):
 
 
 class OODReport(BaseModel):
-    log_entries: list[ReportItem] = Field(
+    entries: list[ReportItem] = Field(
         description="今回『新規』または『更新』として報告した項目のみのリスト(変更なしは含めない)"
     )
 
@@ -232,7 +232,7 @@ def build_researcher_agent(model: str) -> Agent:
     """Open OnDemand調査用の調査担当Agentを構築する。
 
     [実装理由] WebSearchToolによるWeb検索と、構造化出力(OODReport)を組み合わせたAgentを生成する。
-    ログ追記用データ(log_entries)だけを出力させるのは、レポート本文をLLMの自由記述に委ねず、
+    ログ追記用データ(entries)だけを出力させるのは、レポート本文をLLMの自由記述に委ねず、
     呼び出し側で決定的に組み立てられるようにするため。
 
     Args:
@@ -308,11 +308,11 @@ def compose_article(
         base_date=base_date,
         window_start=window_start,
         window_days=window_days,
-        entries=report.log_entries,
+        entries=report.entries,
         report_markdown=render_template(
             "report_markdown.j2",
             categories=CATEGORIES,
-            entries=report.log_entries,
+            entries=report.entries,
         ),
     )
     result = Runner.run_sync(writer, input=prompt, max_turns=max_turns)
@@ -321,23 +321,45 @@ def compose_article(
 
 
 def load_log(log_path: Path) -> str:
-    """報告済み項目ログをテキストとして読み込む。
+    """報告済み項目ログからentriesだけをフラットなMarkdownとして読み込む。
 
-    [実装理由] ログ本文をそのままAgentへの入力に埋め込み、
-    既報告項目との照合をLLM側のテキスト理解に任せる設計のため、構造化パースはせず生テキストを返す。
-    ファイルが存在しない/空の場合も呼び出し側でエラーにせず処理を継続できるよう、
-    その旨を示す文言を返す。
+    [実装理由] 調査担当Agentが照合に必要とするのは過去の項目情報だけであり、調査日時や対象期間を
+    入力に含めると項目比較のノイズになる。実行ごとの記録からentriesを連結し、カテゴリ別の
+    Markdownへ変換することで、ログの保存形式とAgent入力形式を分離する。ファイルが存在しない
+    場合は項目がないことを示すMarkdownを返す。
 
     Args:
-        log_path: ood_report_log.md のパス。
+        log_path: ood_research_log.json のパス。
 
     Returns:
-        ログファイルの内容。存在しない、または空の場合は初回実行を示す文言。
+        過去のentriesをフラットにしたMarkdown。存在しない、または空の場合は項目なしの文言。
     """
-    if log_path.exists():
-        content = log_path.read_text(encoding="utf-8").strip()
-        return content if content else "(まだ記録はありません。今回が初回実行です)"
-    return "(ログファイルが存在しません。今回が初回実行です)"
+    if not log_path.exists():
+        return "(報告済み項目はありません)"
+    content = log_path.read_text(encoding="utf-8").strip()
+    if not content:
+        return "(報告済み項目はありません)"
+    records = json.loads(content)
+    entries = [entry for record in records for entry in record.get("entries", [])]
+    if not entries:
+        return "(報告済み項目はありません)"
+
+    lines = []
+    for category in CATEGORIES:
+        category_entries = [entry for entry in entries if entry.get("category") == category]
+        if not category_entries:
+            continue
+        lines.append(f"### {category}")
+        for entry in category_entries:
+            date_part = f" ({entry['item_date']})" if entry.get("item_date") else ""
+            lines.append(
+                f"- [{entry['status']}] {entry['title']}{date_part} - "
+                f"{entry['summary']} - {entry['url']}"
+            )
+            if entry.get("change_note"):
+                lines.append(f"  変更点: {entry['change_note']}")
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def append_log(
@@ -348,17 +370,15 @@ def append_log(
     base_date: str,
     window_days: int,
 ) -> None:
-    """今回「新規」「更新」と判定された項目をログファイルに追記する。
+    """今回「新規」「更新」と判定された項目をJSONログへ追記する。
 
-    [実装理由] LLMの出力(entries)を整形しつつファイル書き込みを行う処理をPython側に置くことで、書き
-    込み内容と形式を確定的に保証する(LLMにファイル操作ツールを直接与えると、書式崩れや二重書き込みの
-    リスクがあるため避けている)。entriesが空(変更なし)の場合は、ログを不必要に肥大化させないよう何も
-    書き込まない。見出しに時刻(HH:MM)まで含めるのは、同じ日に複数回実行した場合でも
-    docs/ood_report_log_format.md の仕様どおり実行分を区別できるようにするため。
-    ログの実行セクションには調査対象期間も残し、どの期間の調査結果か後から追跡しやすくしている。
+    [実装理由] LLMの出力(entries)をJSONへ変換してファイル書き込みを行う処理をPython側に置くことで、
+    保存内容と形式を確定的に保証する。entriesが空(変更なし)の場合は、ログを不必要に肥大化させない
+    よう何も書き込まない。実行日時と調査対象期間を同じ記録に保存することで、項目がいつどの期間の
+    調査で得られたかを機械的に追跡できるようにする。
 
     Args:
-        log_path: ood_report_log.md のパス。
+        log_path: ood_research_log.json のパス。
         run_at: 実行日時。追記セクションの見出し(YYYY-MM-DD HH:MM)に使う。
         entries: 今回「新規」または「更新」として報告した項目のリスト。
         window_start: 調査期間の開始日(YYYY-MM-DD)。
@@ -370,26 +390,21 @@ def append_log(
     """
     if not entries:
         return
-    lines = [f"\n## {run_at.strftime('%Y-%m-%d %H:%M')} 実行分\n"]
-    lines.append(f"対象期間: {window_start} 〜 {base_date} ({window_days}日間)\n\n")
-    for cat in CATEGORIES:
-        cat_entries = [e for e in entries if e.category == cat]
-        if not cat_entries:
-            continue
-        lines.append(f"### {cat}\n")
-        for e in cat_entries:
-            date_part = f" ({e.item_date})" if e.item_date else ""
-            lines.append(f"- [{e.status}] {e.title}{date_part} - {e.summary} - {e.url}")
-        lines.append("")
-    text = "\n".join(lines) + "\n"
-
-    if log_path.exists():
-        with log_path.open("a", encoding="utf-8") as f:
-            f.write(text)
-    else:
-        header = "# Open OnDemand 情報収集 報告ログ\n"
-        with log_path.open("w", encoding="utf-8") as f:
-            f.write(header + text)
+    records = []
+    if log_path.exists() and log_path.read_text(encoding="utf-8").strip():
+        records = json.loads(log_path.read_text(encoding="utf-8"))
+    records.append(
+        {
+            "datetime": run_at.isoformat(),
+            "period": {
+                "start": window_start,
+                "end": base_date,
+                "days": window_days,
+            },
+            "entries": [entry.model_dump() for entry in entries],
+        }
+    )
+    log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> Path:
@@ -399,7 +414,7 @@ def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> 
     実行ごとに一意なファイル名(分単位のタイムスタンプ入り)で保存し、
     過去のレポートを上書きせず蓄積できるようにする。保存するのは執筆担当Agentが再構成した記事本文で
     あり、調査担当Agentの箇条書き報告文は保存しない。両方を残すとどちらが正なのか読み手が判断できず、
-    ログ(ood_report_log.md)に構造化データが残っている以上、記事側は読み物として一本化する方が
+    ログ(ood_research_log.json)に構造化データが残っている以上、記事側は読み物として一本化する方が
     用途が明確になるためである。
 
     Args:
@@ -641,7 +656,7 @@ def run_writer_agent(
     categories = [
         category
         for category in CATEGORIES
-        if any(entry.category == category for entry in report.log_entries)
+        if any(entry.category == category for entry in report.entries)
     ]
     writer = build_writer_agent(
         model=model,
@@ -695,7 +710,7 @@ def finalize_report(
         return None
 
     print(article_markdown)
-    logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.log_entries))
+    logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.entries))
     logger.info("レポートを %s に保存しました", path)
     return article_markdown, path
 
@@ -744,13 +759,13 @@ def main() -> int:
         append_log(
             log_path,
             run_at,
-            report.log_entries,
+            report.entries,
             window_start.isoformat(),
             base_date.isoformat(),
             window_days,
         )
 
-    if not report.log_entries:
+    if not report.entries:
         logger.info("新しい情報がないため、ニュースレター記事は作成しません")
         return 0
 

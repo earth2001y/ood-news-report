@@ -17,7 +17,7 @@
     ],
     "deny": [
       "Read(./.env)",
-      "Read(./ood_report_log.md)",
+      "Read(./ood_research_log.json)",
       "Read(./output/**)"
     ]
   }

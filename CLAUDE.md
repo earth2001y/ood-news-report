@@ -37,5 +37,5 @@
 ## 参照ドキュメント
 
 - [README.md](README.md) — セットアップと使い方。
-- [docs/ood_report_log_format.md](docs/ood_report_log_format.md) — ログの形式。
+- [docs/ood_research_log_format.md](docs/ood_research_log_format.md) — ログの形式。
 - [docs/report_file_format.md](docs/report_file_format.md) — レポートファイルの形式。

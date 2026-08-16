@@ -6,11 +6,11 @@
 
 保存されるのは、調査担当Agentの構造化出力(`OODReport`)を執筆担当Agentが
 再構成したニュースレター記事(`OODArticle.article_markdown`)です。調査担当Agentが
-出力する構造化項目(`OODReport.log_entries`)から`templates/report_markdown.j2`で
+出力する構造化項目(`OODReport.entries`)から`templates/report_markdown.j2`で
 生成する箇条書き中心の報告文は、執筆担当Agentへの入力としてのみ使われ、ファイルにも
 標準出力にも現れません。
 
-`ood_report_log.md`(既報告項目ログ、[docs/ood_report_log_format.md](ood_report_log_format.md)
+`ood_research_log.json`(既報告項目ログ、[docs/ood_research_log_format.md](ood_research_log_format.md)
 参照)とは別物です。レポートファイルは「その回の実行で得られた最終的な報告文」の
 スナップショットであり、過去の実行分と統合・追記されることはありません。
 
@@ -72,7 +72,7 @@ $OUTDIR/report_<YYYYMMDD>_<HHMM>.md
 - 日本語・敬体(です・ます調)で記述する。
 - 入力された事実をすべて網羅する。
 - 「[新規]」「[更新]」のような角括弧ラベルは使わず、新規か更新かは文章表現で伝える。
-  (角括弧ラベルを使うのは `ood_report_log.md` 側の形式である)
+  (角括弧ラベルを使うのは `ood_research_log.json` の `entries` から生成する報告文側の形式である)
 - 専門用語には必要に応じて短い補足を添え、Open OnDemand の運用担当者がそのまま社内で
   共有できる水準の読み物にする。
 - 記事の末尾に、免責事項や「以上」などの定型句は付けない。
@@ -128,13 +128,13 @@ Discourse では、Slurm クラスタでの対話型アプリのジョブ投入�
 多少ゆれる(厳密なテンプレート出力ではなく、指示に沿った自然文生成であるため)。
 上記は一例であり、完全に固定されたテンプレートではない。
 
-## ood_report_log.md との関係
+## ood_research_log.json との関係
 
-- 記事に書かれる「新規」「更新」の情報のうち、調査担当Agentが `log_entries` として
-  構造化出力したものが `ood_report_log.md` に別形式で追記される。ログに書き込むのは
+- 記事に書かれる「新規」「更新」の情報のうち、調査担当Agentが `entries` として
+  構造化出力したものが `ood_research_log.json` に実行日時・対象期間とともに追記される。ログの `entries` に書き込むのは
   記事ではなく構造化出力であり、記事の文章表現に左右されない。
-- 記事の文章表現と `ood_report_log.md` の1行要約は、内容としては対応しているが、
+- 記事の文章表現と `ood_research_log.json` の項目は、内容としては対応しているが、
   書式(Markdownの構造・語順)は異なる。ログ側では `[新規]` `[更新]` の角括弧
   ラベルを使うが、記事側では使わない。突き合わせが必要な場合は実行日時
   (レポートファイル名の `<YYYYMMDD>_<HHMM>` と、ログの見出し
-  `## <YYYY-MM-DD HH:MM> 実行分`)で対応付ける。
+  `datetime` と `period`)で対応付ける。

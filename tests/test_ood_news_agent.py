@@ -195,14 +195,14 @@ class TestRenderTemplate:
 
     def test_researcher_instructions_uses_structured_entries_only(self):
         # 対象: render_template("researcher_instructions.j2")
-        # パターン: 調査担当の出力形式がlog_entriesだけを要求する
+        # パターン: 調査担当の出力形式がentriesだけを要求する
         rendered = ood.render_template("researcher_instructions.j2")
-        assert "【出力形式(log_entries)】" in rendered
+        assert "【出力形式(entries)】" in rendered
         assert "report_markdown" not in rendered
 
     def test_report_markdown_renders_entries_and_unchanged_categories(self):
         # 対象: render_template("report_markdown.j2")
-        # パターン: log_entriesから項目を分類し、空カテゴリは「変更なし」とする
+        # パターン: entriesから項目を分類し、空カテゴリは「変更なし」とする
         rendered = ood.render_template(
             "report_markdown.j2",
             categories=ood.CATEGORIES,
@@ -308,41 +308,76 @@ class TestRenderTemplate:
         assert "基準日より後に公開・更新された情報" in rendered
         assert "報告に含めない" in rendered
 
+    def test_researcher_input_lists_flat_entries_without_log_metadata(self):
+        # 対象: render_template("researcher_input.j2")
+        # パターン: 前回ログのentriesだけを調査回の区切りなしで埋め込む
+        rendered = ood.render_template(
+            "researcher_input.j2",
+            base_date="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            existing_log=json.dumps(
+                [{"title": "v3.1.0"}, {"title": "CVE-2026-0001"}],
+                ensure_ascii=False,
+            ),
+        )
+        assert '"title": "v3.1.0"' in rendered
+        assert '"title": "CVE-2026-0001"' in rendered
+        assert "datetime" not in rendered
+        assert "period" not in rendered
+
 
 class TestLoadLog:
-    def test_missing_file_returns_placeholder(self, tmp_path):
+    def test_missing_file_returns_empty_markdown_placeholder(self, tmp_path):
         # 対象: load_log
-        # パターン: ログファイルが存在しない場合、初回実行を示す文言を返す
-        log_path = tmp_path / "ood_report_log.md"
-        assert ood.load_log(log_path) == "(ログファイルが存在しません。今回が初回実行です)"
+        # パターン: ログファイルが存在しない場合、項目なしのMarkdownを返す
+        log_path = tmp_path / "ood_research_log.json"
+        assert ood.load_log(log_path) == "(報告済み項目はありません)"
 
-    def test_empty_file_returns_placeholder(self, tmp_path):
+    def test_empty_file_returns_empty_markdown_placeholder(self, tmp_path):
         # 対象: load_log
-        # パターン: ログファイルが空白のみの場合、初回実行を示す文言を返す
-        log_path = tmp_path / "ood_report_log.md"
+        # パターン: ログファイルが空白のみの場合、項目なしのMarkdownを返す
+        log_path = tmp_path / "ood_research_log.json"
         log_path.write_text("   \n", encoding="utf-8")
-        assert ood.load_log(log_path) == "(まだ記録はありません。今回が初回実行です)"
+        assert ood.load_log(log_path) == "(報告済み項目はありません)"
 
-    def test_existing_content_is_stripped(self, tmp_path):
+    def test_existing_json_entries_are_flattened_to_markdown(self, tmp_path):
         # 対象: load_log
-        # パターン: 既存の記録がある場合、前後の空白を除いた本文を返す
-        log_path = tmp_path / "ood_report_log.md"
-        log_path.write_text("\n# ログ\n内容\n\n", encoding="utf-8")
-        assert ood.load_log(log_path) == "# ログ\n内容"
+        # パターン: 実行記録からentriesだけを抽出し、調査回をまたいだMarkdownとして返す
+        log_path = tmp_path / "ood_research_log.json"
+        log_path.write_text(
+            '[{"datetime": "2026-08-13T09:30:00", "period": {}, '
+            '"entries": [{"category": "新バージョンのリリース情報", "status": "新規", '
+            '"title": "v3.1.0", "item_date": "2026-08-01", "url": "https://example.com/v3.1.0", '
+            '"summary": "新機能が追加された", "change_note": ""}]}, '
+            '{"datetime": "2026-08-14T09:30:00", "period": {}, '
+            '"entries": [{"category": "新バージョンのリリース情報", "status": "更新", '
+            '"title": "v3.1.0", "item_date": "2026-08-02", "url": "https://example.com/v3.1.0", '
+            '"summary": "修正が追加された", "change_note": "変更点あり"}]}]\n',
+            encoding="utf-8",
+        )
+        rendered = ood.load_log(log_path)
+        assert rendered.startswith("### 新バージョンのリリース情報")
+        assert rendered.count("- [") == 2
+        assert "v3.1.0 (2026-08-01)" in rendered
+        assert "v3.1.0 (2026-08-02)" in rendered
+        assert "変更点: 変更点あり" in rendered
+        assert "2026-08-13T09:30:00" not in rendered
+        assert '"datetime"' not in rendered
 
 
 class TestAppendLog:
     def test_no_entries_does_not_create_file(self, tmp_path):
         # 対象: append_log
         # パターン: entriesが空の場合、ファイルを作成しない
-        log_path = tmp_path / "ood_report_log.md"
+        log_path = tmp_path / "ood_research_log.json"
         ood.append_log(log_path, datetime(2026, 8, 13, 9, 30), [], "2026-07-14", "2026-08-13", 30)
         assert not log_path.exists()
 
     def test_creates_file_with_header_when_absent(self, tmp_path):
         # 対象: append_log
-        # パターン: ログファイルが存在しない場合、見出し付きで新規作成し、対象期間を記録する
-        log_path = tmp_path / "ood_report_log.md"
+        # パターン: ログファイルが存在しない場合、JSON記録を新規作成し、対象期間を記録する
+        log_path = tmp_path / "ood_research_log.json"
         ood.append_log(
             log_path,
             datetime(2026, 8, 13, 9, 30),
@@ -351,20 +386,20 @@ class TestAppendLog:
             "2026-08-13",
             30,
         )
-        text = log_path.read_text(encoding="utf-8")
-        assert text.startswith("# Open OnDemand 情報収集 報告ログ\n")
-        assert "## 2026-08-13 09:30 実行分" in text
-        assert "対象期間: 2026-07-14 〜 2026-08-13 (30日間)" in text
-        assert "### 新バージョンのリリース情報" in text
-        assert (
-            "- [新規] v3.1.0 (2026-08-01) - 新機能が追加された - https://example.com/v3.1.0" in text
-        )
+        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        assert record["datetime"] == "2026-08-13T09:30:00"
+        assert record["period"] == {
+            "start": "2026-07-14",
+            "end": "2026-08-13",
+            "days": 30,
+        }
+        assert record["entries"] == [_make_entry().model_dump()]
 
     def test_appends_without_duplicating_header(self, tmp_path):
         # 対象: append_log
-        # パターン: ログファイルが既存の場合、見出しを重複させず追記し、対象期間を記録する
-        log_path = tmp_path / "ood_report_log.md"
-        log_path.write_text("# Open OnDemand 情報収集 報告ログ\n", encoding="utf-8")
+        # パターン: ログファイルが既存の場合、既存配列を保って記録を追記する
+        log_path = tmp_path / "ood_research_log.json"
+        log_path.write_text("[]\n", encoding="utf-8")
         ood.append_log(
             log_path,
             datetime(2026, 8, 13, 10, 0),
@@ -373,15 +408,15 @@ class TestAppendLog:
             "2026-08-13",
             30,
         )
-        text = log_path.read_text(encoding="utf-8")
-        assert text.count("# Open OnDemand 情報収集 報告ログ") == 1
-        assert "対象期間: 2026-07-14 〜 2026-08-13 (30日間)" in text
-        assert "- [新規] v3.1.0 - 新機能が追加された - https://example.com/v3.1.0" in text
+        records = json.loads(log_path.read_text(encoding="utf-8"))
+        assert len(records) == 1
+        assert records[0]["period"]["days"] == 30
+        assert records[0]["entries"][0]["item_date"] == ""
 
     def test_groups_entries_by_category_order(self, tmp_path):
         # 対象: append_log
         # パターン: entriesの順序に関わらず、CATEGORIESの順で出力される
-        log_path = tmp_path / "ood_report_log.md"
+        log_path = tmp_path / "ood_research_log.json"
         entries = [
             _make_entry(category="コミュニティイベント", title="GOOD Conference 2026"),
             _make_entry(category="新バージョンのリリース情報", title="v3.1.0"),
@@ -394,13 +429,16 @@ class TestAppendLog:
             "2026-08-13",
             30,
         )
-        text = log_path.read_text(encoding="utf-8")
-        assert text.index("新バージョンのリリース情報") < text.index("コミュニティイベント")
+        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        assert [entry["category"] for entry in record["entries"]] == [
+            "コミュニティイベント",
+            "新バージョンのリリース情報",
+        ]
 
     def test_update_status_includes_change_note(self, tmp_path):
         # 対象: append_log
         # パターン: status="更新"の項目が[更新]ラベル付きで出力される
-        log_path = tmp_path / "ood_report_log.md"
+        log_path = tmp_path / "ood_research_log.json"
         entry = _make_entry(status="更新", change_note="深刻度がCriticalに変更")
         ood.append_log(
             log_path,
@@ -410,8 +448,9 @@ class TestAppendLog:
             "2026-08-13",
             30,
         )
-        text = log_path.read_text(encoding="utf-8")
-        assert "[更新] v3.1.0" in text
+        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        assert record["entries"][0]["status"] == "更新"
+        assert record["entries"][0]["change_note"] == "深刻度がCriticalに変更"
 
 
 class TestWriteReportFile:
@@ -523,7 +562,7 @@ class TestComposeArticle:
             final_output = OODArticle(article_markdown="# 記事本文")
 
         monkeypatch.setattr(ood.Runner, "run_sync", lambda agent, input, max_turns: _FakeResult())
-        report = OODReport(log_entries=[_make_entry()])
+        report = OODReport(entries=[_make_entry()])
 
         article = ood.compose_article(
             object(),
@@ -550,7 +589,7 @@ class TestComposeArticle:
             return _FakeResult()
 
         monkeypatch.setattr(ood.Runner, "run_sync", _fake_run_sync)
-        report = OODReport(log_entries=[_make_entry()])
+        report = OODReport(entries=[_make_entry()])
 
         ood.compose_article(
             object(),
@@ -572,7 +611,7 @@ class TestMainNoNewInformation:
     ):
         # 対象: main
         # パターン: 調査結果の項目が空の場合、執筆・出力・ファイル保存を行わず正常終了する
-        report = OODReport(log_entries=[])
+        report = OODReport(entries=[])
         models = _stub_agents(monkeypatch, report, "記事本文")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
@@ -582,7 +621,7 @@ class TestMainNoNewInformation:
 
         assert "writer" not in models
         assert capsys.readouterr().out == ""
-        assert not (tmp_path / "ood_report_log.md").exists()
+        assert not (tmp_path / "ood_research_log.json").exists()
         assert not (tmp_path / "output").exists()
 
 
@@ -704,7 +743,7 @@ class TestParseArguments:
 
         log_path = ood.resolve_log_path()
 
-        assert log_path == tmp_path / "log" / "ood_report_log.md"
+        assert log_path == tmp_path / "log" / "ood_research_log.json"
         assert log_path.parent.is_dir()
 
     def test_resolve_log_path_uses_environment_directory(self, monkeypatch, tmp_path):
@@ -715,7 +754,7 @@ class TestParseArguments:
 
         log_path = ood.resolve_log_path()
 
-        assert log_path == tmp_path / "custom-logs" / "ood_report_log.md"
+        assert log_path == tmp_path / "custom-logs" / "ood_research_log.json"
         assert log_path.parent.is_dir()
 
 
@@ -763,9 +802,9 @@ class TestMain:
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_report_log.md"
+        log_path = tmp_path / "logs" / "ood_research_log.json"
         outdir = tmp_path / "output"
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             ood,
@@ -799,7 +838,7 @@ class TestMain:
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         captured = {}
 
@@ -825,7 +864,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         captured_input = {}
 
-        empty_report = OODReport(log_entries=[])
+        empty_report = OODReport(entries=[])
 
         def _run_sync(agent, input, max_turns):
             captured_input.setdefault("text", input)
@@ -858,13 +897,13 @@ class TestMain:
 
     def test_base_date_does_not_change_report_filename(self, tmp_path, monkeypatch):
         # 対象: main
-        # パターン: 基準日を過去にしても、ファイル名とログ見出しは実行日時のまま
+        # パターン: 基準日を過去にしても、ファイル名は実行日時で、JSONログに対象期間を記録する
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_report_log.md"
+        log_path = tmp_path / "logs" / "ood_research_log.json"
         outdir = tmp_path / "output"
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             sys,
@@ -882,11 +921,13 @@ class TestMain:
         report_files = [p.name for p in outdir.glob("report_*.md")]
         assert len(report_files) == 1
         assert report_files[0].startswith(f"report_{today}_")
-        log_text = log_path.read_text(encoding="utf-8")
-        assert "## " in log_text
-        assert "対象期間: 2019-12-02 〜 2020-01-01 (30日間)" in log_text
-        assert "## 2020-01-01" not in log_text
-        assert "実行分" in log_text
+        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        assert record["datetime"].startswith(datetime.now().strftime("%Y-%m-%dT"))
+        assert record["period"] == {
+            "start": "2019-12-02",
+            "end": "2020-01-01",
+            "days": 30,
+        }
 
     def test_invalid_base_date_returns_error_without_calling_api(
         self, tmp_path, monkeypatch, capsys
@@ -895,7 +936,7 @@ class TestMain:
         # パターン: 基準日の書式が不正な場合、Agentを実行せず終了コード1とERRORログを返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
-        log_path = tmp_path / "logs" / "ood_report_log.md"
+        log_path = tmp_path / "logs" / "ood_research_log.json"
         outdir = tmp_path / "output"
         monkeypatch.setenv("OUTDIR", str(outdir))
 
@@ -926,7 +967,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
@@ -944,7 +985,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             sys,
@@ -971,7 +1012,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(log_entries=[])
+        fake_report = OODReport(entries=[])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
         monkeypatch.setattr(
             sys,
@@ -1004,7 +1045,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_report_log.md"
+        log_path = tmp_path / "logs" / "ood_research_log.json"
         outdir = tmp_path / "output"
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
         monkeypatch.setattr(
@@ -1029,9 +1070,9 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_report_log.md"
+        log_path = tmp_path / "logs" / "ood_research_log.json"
         outdir = tmp_path / "output"
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
         monkeypatch.setattr(ood, "build_writer_agent", lambda model, categories=None: object())
         monkeypatch.setattr(
@@ -1058,9 +1099,9 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_report_log.md"
+        log_path = tmp_path / "logs" / "ood_research_log.json"
         outdir = tmp_path / "output"
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 今回のニュースレター")
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
@@ -1083,7 +1124,7 @@ class TestMain:
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
             sys,
@@ -1108,7 +1149,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        fake_report = OODReport(log_entries=[_make_entry()])
+        fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
             sys,
@@ -1129,14 +1170,14 @@ class TestMain:
             "writer_categories": [ood.CATEGORIES[0]],
         }
 
-    def test_no_log_entries_does_not_create_log_file(self, tmp_path, monkeypatch):
+    def test_no_entries_does_not_create_log_file(self, tmp_path, monkeypatch):
         # 対象: main
-        # パターン: log_entriesが空の場合、ログファイルは作成されず終了コード0を返す
+        # パターン: entriesが空の場合、ログファイルは作成されず終了コード0を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_report_log.md"
-        fake_report = OODReport(log_entries=[])
+        log_path = tmp_path / "logs" / "ood_research_log.json"
+        fake_report = OODReport(entries=[])
         _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 

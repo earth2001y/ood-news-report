@@ -39,8 +39,8 @@ CLI エージェント。
   - `build_writer_agent`: 調査結果を記事へ再構成する執筆担当 Agent を構築する
     （Web 検索ツールは持たせない）。
   - `compose_article`: 調査結果を執筆担当 Agent に渡し、記事本文を得る。
-  - `load_log` / `append_log`: `ood_report_log.md` を読み込み、追記する。追記する
-    のは `OODReport.log_entries` であり、再構成後の記事ではない。
+  - `load_log` / `append_log`: `ood_research_log.json` を読み込み、追記する。追記する
+    のは `OODReport.entries` であり、再構成後の記事ではない。
   - `write_report_file`: 記事を `$OUTDIR/report_YYYYMMDD_HHMM.md` に保存する。
   - `describe_api_error`: OpenAI API のエラーを、対処方法を含む日本語メッセージに
     変換する。対処方法の文言は `API_ERROR_HINTS` に集約する。
@@ -55,7 +55,7 @@ CLI エージェント。
 - `pyproject.toml`: ruff と pytest の設定。
 - `Makefile`: 開発用コマンド。
 
-`ood_report_log.md` と `output/` は実行時に生成され、Git の追跡対象外である。
+`ood_research_log.json` と `output/` は実行時に生成され、Git の追跡対象外である。
 
 ## 実行環境
 

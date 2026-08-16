@@ -15,8 +15,8 @@ Web検索で収集し、日本語で報告するエージェントです。
 期間の終端となる基準日は既定で実行日ですが、`--base-date` で過去や未来の日付を
 指定できます。
 
-実行するたびに `LOGDIR` で指定したディレクトリ配下の `ood_report_log.md`(報告済み項目ログ)と
-今回の調査結果を照合し、完全に新規の情報は「新規」、既報告項目に進展・変更があれば
+実行するたびに `LOGDIR` で指定したディレクトリ配下の `ood_research_log.json`(報告済み項目ログ)から
+各調査回の `entries` だけをフラットに取り出して今回の調査結果と照合し、完全に新規の情報は「新規」、既報告項目に進展・変更があれば
 「更新」として何が変わったかを明記して報告します。変更のない既報告項目は
 再報告しません。該当情報がないカテゴリは「変更なし」と明記します。
 
@@ -24,7 +24,8 @@ Web検索で収集し、日本語で報告するエージェントです。
 
 1. **調査**: 調査担当Agent(`build_researcher_agent`)が WebSearchTool で情報を収集し、
    ログと照合して構造化データ(`OODReport`)を出力します。
-2. **ログ追記**: `OODReport.log_entries` を `ood_report_log.md` に追記します。
+2. **ログ追記**: 調査日時・調査対象期間・`OODReport.entries` を
+  `ood_research_log.json` にJSON形式で追記します。
    ログの内容は再構成の影響を受けません。
 3. **記事の再構成**: 執筆担当Agent(`build_writer_agent`)が調査結果を受け取り、
    箇条書きではなく地の文のニュースレター記事(`OODArticle`)に再構成します。
@@ -116,7 +117,7 @@ python ood_news_agent.py --log-level INFO 2>/dev/null > report.md
 ### ドライラン
 
 `--dry-run` を指定すると、通常どおりOpenAI APIを呼び出して調査と記事再構成を行いますが、
-`LOGDIR` 配下の `ood_report_log.md` への追記、レポートファイルの保存、Slackへの投稿は行いません。
+`LOGDIR` 配下の `ood_research_log.json` への追記、レポートファイルの保存、Slackへの投稿は行いません。
 再構成した記事は標準出力に表示されるため、保存前に内容を確認する用途に使えます。
 
 ```bash
@@ -130,10 +131,11 @@ python ood_news_agent.py --dry-run
 - `$OUTDIR/report_YYYYMMDD_HHMM.md`: 標準出力と同じ記事本文を実行ごとに
   ファイルとしても保存する(ディレクトリが存在しない場合は自動作成)
   (フォーマットの詳細は [docs/report_file_format.md](docs/report_file_format.md) 参照)
-- `$LOGDIR/ood_report_log.md`: 今回「新規」「更新」として報告した項目が実行日時ごとに追記される。
+- `$LOGDIR/ood_research_log.json`: 調査日時・調査対象期間・今回「新規」「更新」として報告した
+  項目が実行日時ごとにJSON形式で追記される。
   ディレクトリが存在しない場合は自動作成され、既定値は `.log` である。
   記事ではなく調査担当Agentの構造化出力をそのまま記録するため、形式は従来から変わらない
-  (フォーマットの詳細は [docs/ood_report_log_format.md](docs/ood_report_log_format.md) 参照)
+  (フォーマットの詳細は [docs/ood_research_log_format.md](docs/ood_research_log_format.md) 参照)
 
 新規・更新項目がない場合は、執筆担当Agentを実行せず、標準出力・レポートファイルへの
 出力も行いません。ログへの追記もありません。
@@ -158,7 +160,7 @@ OpenAI API の呼び出しが失敗した場合、スタックトレースでは
 上記以外のエラーコードでも、HTTP ステータスと API からのメッセージをそのまま
 提示します。
 
-調査には成功したが記事の再構成で失敗した場合、`ood_report_log.md` への追記は
+調査には成功したが記事の再構成で失敗した場合、`ood_research_log.json` への追記は
 すでに完了しています(調査結果を失わないため、追記は再構成より先に行います)。
 この状態で再実行すると、追記済みの項目は「変更なし」と判定されて再報告されない
 点に注意してください。同じ内容を記事にしたい場合は、ログから該当セクションを
