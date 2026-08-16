@@ -53,7 +53,7 @@ from dotenv import load_dotenv
 from openai import APIError
 
 from .news_models import CATEGORIES, OODReport, ReportItem
-from .researcher import run_researcher
+from .researcher import ResearchPeriod, run_researcher
 from .writer import compose_article
 
 load_dotenv()
@@ -532,28 +532,39 @@ def describe_api_error(error: APIError) -> str:
 
 
 def run_researcher_agent(
-    args: argparse.Namespace,
+    model: str,
     existing_log: str,
     base_date: date,
     window_start: date,
     window_days: int,
+    max_turns: int,
 ) -> OODReport | None:
     """調査担当Agentを実行し、結果を返す。
 
     [実装理由] main から API 呼び出しと入力構築を切り出すことで、調査の条件と失敗処理が
     別の関数で見通しよく保守できるようにしている。これにより main は制御フローに集中し、
     80 行を超えない長さを維持できる。
+
+    Args:
+        model: 調査担当Agentに使用するモデル名。
+        existing_log: 過去に報告した項目のMarkdown。
+        base_date: 調査対象期間の基準日。
+        window_start: 調査対象期間の開始日。
+        window_days: 調査対象期間の日数。
+        max_turns: Agent実行の最大ターン数。
     """
     period = f"{window_start.isoformat()} to {base_date.isoformat()}"
     logger.info("Researching the latest Open OnDemand news... (period: %s)", period)
     try:
         return run_researcher(
-            model=args.model,
+            model=model,
             existing_log=existing_log,
-            base_date=base_date.isoformat(),
-            window_start=window_start.isoformat(),
-            window_days=window_days,
-            max_turns=args.max_turns,
+            period=ResearchPeriod(
+                base_date=base_date.isoformat(),
+                window_start=window_start.isoformat(),
+                window_days=window_days,
+            ),
+            max_turns=max_turns,
         )
     except APIError as e:
         logger.error("Research failed. %s", describe_api_error(e))
@@ -581,30 +592,21 @@ def persist_report(article_markdown: str, outdir: Path, run_at: datetime) -> Pat
     return path
 
 
-def run_writer_agent(
-    args: argparse.Namespace,
-    report: OODReport,
-    log_path: Path,
-    model: str,
-    base_date: date,
-    window_start: date,
-    window_days: int,
-) -> str | None:
+def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: int) -> str | None:
     """調査結果を執筆担当Agentで記事へ再構成する。
 
     [実装理由] 執筆担当Agentの作成・実行と、ファイル保存・Slack投稿を分離することで、
     Agent実行の失敗と副作用を伴う永続化処理を独立して扱えるようにしている。
+
+    Args:
+        report: 調査担当Agentの構造化出力。
+        log_path: 調査結果を保存したログファイルのパス。
+        model: 執筆担当Agentに使用するモデル名。
+        max_turns: Agent実行の最大ターン数。
     """
     logger.info("Composing a newsletter article from the research results...")
     try:
-        article_markdown = compose_article(
-            model=model,
-            report=report,
-            base_date=base_date.isoformat(),
-            window_start=window_start.isoformat(),
-            window_days=window_days,
-            max_turns=args.max_turns,
-        )
+        article_markdown = compose_article(model=model, report=report, max_turns=max_turns)
     except APIError as e:
         logger.error(
             "Article composition failed. %s\n"
@@ -674,7 +676,9 @@ def main() -> int:
     window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
     window_start = base_date - timedelta(days=window_days)
     existing_log = load_log(log_dir, resolve_max_log_runs(args.max_log_runs))
-    report = run_researcher_agent(args, existing_log, base_date, window_start, window_days)
+    report = run_researcher_agent(
+        args.model, existing_log, base_date, window_start, window_days, args.max_turns
+    )
     if report is None:
         return 1
 
@@ -694,9 +698,7 @@ def main() -> int:
         return 0
 
     writer_model = args.writer_model or args.model
-    article_markdown = run_writer_agent(
-        args, report, log_path or log_dir, writer_model, base_date, window_start, window_days
-    )
+    article_markdown = run_writer_agent(report, log_path or log_dir, writer_model, args.max_turns)
     if article_markdown is None:
         return 1
 

@@ -34,9 +34,7 @@ class TestRunResearcher:
         report = researcher.run_researcher(
             model="gpt-test",
             existing_log="### new_release\n- v3.0.0",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
+            period={"base_date": "2026-08-13", "window_start": "2026-07-14", "window_days": 30},
             max_turns=12,
         )
 

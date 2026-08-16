@@ -42,14 +42,7 @@ class TestComposeArticle:
         )
         report = OODReport(entries=[make_entry()])
 
-        article = writer.compose_article(
-            model="gpt-test",
-            report=report,
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            max_turns=12,
-        )
+        article = writer.compose_article(model="gpt-test", report=report, max_turns=12)
 
         assert article == "# 記事本文"
 
@@ -69,14 +62,7 @@ class TestComposeArticle:
         monkeypatch.setattr(writer.Runner, "run_sync", _fake_run_sync)
         report = OODReport(entries=[make_entry()])
 
-        writer.compose_article(
-            model="gpt-test",
-            report=report,
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            max_turns=12,
-        )
+        writer.compose_article(model="gpt-test", report=report, max_turns=12)
 
         assert "v3.1.0" in captured["input"]
         assert "## new_release" in captured["input"]
@@ -97,14 +83,7 @@ class TestComposeArticle:
         monkeypatch.setattr(writer.Runner, "run_sync", _fake_run_sync)
         report = OODReport(entries=[make_entry(category="community_event")])
 
-        writer.compose_article(
-            model="gpt-test",
-            report=report,
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            max_turns=12,
-        )
+        writer.compose_article(model="gpt-test", report=report, max_turns=12)
 
         instructions = captured["instructions"]
         assert "1. Community events (`community_event`)" in instructions
@@ -129,14 +108,7 @@ class TestComposeArticle:
             ]
         )
 
-        writer.compose_article(
-            model="gpt-test",
-            report=report,
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            max_turns=12,
-        )
+        writer.compose_article(model="gpt-test", report=report, max_turns=12)
 
         assert "Category: security" in captured["input"]
         assert "Status: updated" in captured["input"]

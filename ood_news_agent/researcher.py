@@ -1,9 +1,19 @@
 """Open OnDemand の最新情報を検索し、構造化された調査結果を生成する。"""
 
+from typing import TypedDict
+
 from agents import Agent, Runner, WebSearchTool
 
 from .news_models import OODReport
 from .prompt_templates import render_template
+
+
+class ResearchPeriod(TypedDict):
+    """調査対象期間をテンプレートへ渡すための値。"""
+
+    base_date: str
+    window_start: str
+    window_days: int
 
 
 def build_researcher_agent(model: str) -> Agent:
@@ -29,9 +39,7 @@ def build_researcher_agent(model: str) -> Agent:
     )
 
 
-def build_researcher_prompt(
-    existing_log: str, base_date: str, window_start: str, window_days: int
-) -> str:
+def build_researcher_prompt(existing_log: str, period: ResearchPeriod) -> str:
     """調査条件と過去ログから調査担当Agentへの入力を組み立てる。
 
     [実装理由] 調査固有の入力項目をこのモジュールに集約し、CLIがテンプレートの詳細を
@@ -40,29 +48,16 @@ def build_researcher_prompt(
 
     Args:
         existing_log: 過去に報告した項目のMarkdown。
-        base_date: 調査対象期間の基準日(YYYY-MM-DD)。
-        window_start: 調査対象期間の開始日(YYYY-MM-DD)。
-        window_days: 調査対象期間の日数。
+        period: 調査対象期間の基準日・開始日・日数。
 
     Returns:
         レンダリング済みの調査入力プロンプト。
     """
-    return render_template(
-        "researcher_input.j2",
-        base_date=base_date,
-        window_start=window_start,
-        window_days=window_days,
-        existing_log=existing_log,
-    )
+    return render_template("researcher_input.j2", **period, existing_log=existing_log)
 
 
 def run_researcher(
-    model: str,
-    existing_log: str,
-    base_date: str,
-    window_start: str,
-    window_days: int,
-    max_turns: int,
+    model: str, existing_log: str, period: ResearchPeriod, max_turns: int
 ) -> OODReport:
     """調査担当Agentを構築・実行し、構造化された調査結果を返す。
 
@@ -73,16 +68,14 @@ def run_researcher(
     Args:
         model: 使用するモデル名。
         existing_log: 過去に報告した項目のMarkdown。
-        base_date: 調査対象期間の基準日(YYYY-MM-DD)。
-        window_start: 調査対象期間の開始日(YYYY-MM-DD)。
-        window_days: 調査対象期間の日数。
+        period: 調査対象期間の基準日・開始日・日数。
         max_turns: Agent実行の最大ターン数。
 
     Returns:
         新規または更新された項目だけを含む調査結果。
     """
     agent = build_researcher_agent(model)
-    prompt = build_researcher_prompt(existing_log, base_date, window_start, window_days)
+    prompt = build_researcher_prompt(existing_log, period)
     result = Runner.run_sync(agent, input=prompt, max_turns=max_turns)
     report: OODReport = result.final_output
     return report

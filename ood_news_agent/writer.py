@@ -52,9 +52,7 @@ def build_writer_agent(model: str, categories: list[str] | None = None) -> Agent
     )
 
 
-def build_writer_prompt(
-    report: OODReport, base_date: str, window_start: str, window_days: int
-) -> str:
+def build_writer_prompt(report: OODReport) -> str:
     """構造化された調査結果から執筆担当Agentへの入力を組み立てる。
 
     [実装理由] 構造化項目とカテゴリ別Markdownの両方を執筆担当へ渡す処理をこのモジュールに
@@ -62,18 +60,12 @@ def build_writer_prompt(
 
     Args:
         report: 調査担当Agentの構造化出力。
-        base_date: 調査対象期間の基準日(YYYY-MM-DD)。
-        window_start: 調査対象期間の開始日(YYYY-MM-DD)。
-        window_days: 調査対象期間の日数。
 
     Returns:
         レンダリング済みの記事執筆入力プロンプト。
     """
     return render_template(
         "writer_input.j2",
-        base_date=base_date,
-        window_start=window_start,
-        window_days=window_days,
         entries=report.entries,
         report_markdown=render_template(
             "report_markdown.j2", categories=CATEGORIES, entries=report.entries
@@ -81,14 +73,7 @@ def build_writer_prompt(
     )
 
 
-def compose_article(
-    model: str,
-    report: OODReport,
-    base_date: str,
-    window_start: str,
-    window_days: int,
-    max_turns: int,
-) -> str:
+def compose_article(model: str, report: OODReport, max_turns: int) -> str:
     """調査結果を執筆担当Agentで日本語の記事へ再構成する。
 
     [実装理由] Agentの構築、入力生成、SDKの実行を執筆担当モジュールで完結させることで、
@@ -98,9 +83,6 @@ def compose_article(
     Args:
         model: 使用するモデル名。
         report: 調査担当Agentの構造化出力。
-        base_date: 調査対象期間の基準日(YYYY-MM-DD)。
-        window_start: 調査対象期間の開始日(YYYY-MM-DD)。
-        window_days: 調査対象期間の日数。
         max_turns: Agent実行の最大ターン数。
 
     Returns:
@@ -112,7 +94,7 @@ def compose_article(
         if any(entry.category == category for entry in report.entries)
     ]
     agent = build_writer_agent(model, categories)
-    prompt = build_writer_prompt(report, base_date, window_start, window_days)
+    prompt = build_writer_prompt(report)
     result = Runner.run_sync(agent, input=prompt, max_turns=max_turns)
     article: OODArticle = result.final_output
     return article.article_markdown

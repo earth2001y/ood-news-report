@@ -758,9 +758,11 @@ class TestMain:
         assert ood.main() == 0
 
         # 基準日を終端に、window-days 日前が開始日になる
-        assert captured_input["base_date"] == "2026-07-31"
-        assert captured_input["window_start"] == "2026-07-21"
-        assert captured_input["window_days"] == 10
+        assert captured_input["period"] == {
+            "base_date": "2026-07-31",
+            "window_start": "2026-07-21",
+            "window_days": 10,
+        }
         assert "2026-07-21 to 2026-07-31" in capsys.readouterr().err
 
     def test_base_date_does_not_change_report_filename(self, tmp_path, monkeypatch):
