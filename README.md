@@ -40,7 +40,7 @@ Web検索で収集し、日本語で報告するエージェントです。
     記事執筆を行いません。
 4. **出力**: 執筆した記事を標準出力に表示し、レポートファイルに保存します。
 
-`--only-researcher` を指定すると手順1〜2だけを、`--only-writer` を指定すると
+`--researcher-mode` を指定すると手順1〜2だけを、`--writer-mode` を指定すると
 `--research-result` で指定した調査結果JSONを入力として手順3〜4だけを実行します。
 JSONを指定しなければ `LOGDIR` 内の最新の調査ログ1件を使います。どちらの実行モードも
 指定しない場合は、従来どおりすべての手順を続けて実行します。
@@ -74,19 +74,19 @@ python -m app
 
 | オプション | 環境変数 | デフォルト値 | 説明 |
 | --- | --- | --- | --- |
-| `--model` | `OOD_AGENT_MODEL` | `gpt-5.4` | 使用するモデル(WebSearchTool対応のResponses APIモデル) |
-| `--writer-model` | `OOD_WRITER_MODEL` | `--model` と同じ | 記事執筆に使うモデル(WebSearchTool対応モデル) |
+| `--model` | `AGENT_MODEL` | `gpt-5.4` | 使用するモデル(WebSearchTool対応のResponses APIモデル) |
+| `--writer-model` | `WRITER_MODEL` | `--model` と同じ | 記事執筆に使うモデル(WebSearchTool対応モデル) |
 | `--window-days` | `WINDOW_DAYS` | `30` | 調査対象期間(日数) |
-| `--max-log-runs` | `MAX_LOG_RUNS` | `10` | 調査担当Agentへ渡す過去の調査ログの件数(調査回数)の上限。`0` 以下で上限なし |
+| `--max-log-runs` | `MAX_LOG_RUNS` | `10` | 調査担当Agentへ渡す過去の調査ログの件数(調査回数)の上限。`-1` 以下で上限なし |
 | `--base-date` | `BASE_DATE` | 実行日 | 調査対象期間の基準日(`YYYY-MM-DD`)。この日を終端とする |
-| `--log-level` | `OOD_LOG_LEVEL` | `WARNING` | ログの出力レベル(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`) |
+| `--log-level` | `LOG_LEVEL` | `WARNING` | ログの出力レベル(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`) |
 | `--dry-run` | なし | 無効 | APIによる調査・記事執筆を行うが、調査ログ保存・レポート保存・Slack投稿は行わない |
-| `--only-researcher` | なし | 無効 | 調査と調査ログの保存だけを行い、記事執筆は行わない |
-| `--only-writer` | なし | 無効 | 調査結果JSONを使った記事執筆だけを行い、調査は行わない |
-| `--research-result PATH` | なし | 最新の調査ログ | 記事執筆に使う調査結果JSON (`--only-writer` 指定時のみ) |
+| `--researcher-mode` | なし | 無効 | 調査と調査ログの保存だけを行い、記事執筆は行わない |
+| `--writer-mode` | なし | 無効 | 調査結果JSONを使った記事執筆だけを行い、調査は行わない |
+| `--research-result PATH` | なし | 最新の調査ログ | 記事執筆に使う調査結果JSON (`--writer-mode` 指定時のみ) |
 | `--max-turns` | なし | `40` | Agent実行の最大ターン数 |
 
-`--only-researcher` と `--only-writer` は同時に指定できません。
+`--researcher-mode` と `--writer-mode` は同時に指定できません。
 
 ### 環境変数のみで指定する項目
 
@@ -130,25 +130,25 @@ Agentに指示しています。書式が `YYYY-MM-DD` として解釈できな�
 調査結果を先に保存し、後から記事を執筆する場合は、次のように2回に分けて実行できます。
 
 ```bash
-python -m app --only-researcher
-python -m app --only-writer
+python -m app --researcher-mode
+python -m app --writer-mode
 
 # 最新ではなく、指定した調査結果から記事を執筆する
-python -m app --only-writer --research-result .research_log/ood_research_log_20260814_0930.json
+python -m app --writer-mode --research-result .research_log/ood_research_log_20260814_0930.json
 ```
 
-`--only-researcher` は調査結果を通常と同じ形式で `LOGDIR` に保存し、記事の執筆、
-レポートファイルの保存、Slackへの投稿は行いません。`--only-writer` は調査を行わず、
+`--researcher-mode` は調査結果を通常と同じ形式で `LOGDIR` に保存し、記事の執筆、
+レポートファイルの保存、Slackへの投稿は行いません。`--writer-mode` は調査を行わず、
 `--research-result` で指定した調査結果JSONから記事を執筆します。このオプションを
 省略した場合は、`LOGDIR` 内でファイル名が最も新しい調査ログ1件を使います。
-`--research-result` は `--only-writer` と組み合わせた場合だけ指定できます。指定した
+`--research-result` は `--writer-mode` と組み合わせた場合だけ指定できます。指定した
 ファイル、または省略時の最新ログが存在しない場合は終了コード1でエラー終了し、
 既存の調査ログは追加・変更しません。JSONは
 [調査ログのフォーマット](docs/ood_research_log_format.md)に従う必要があります。
 
-`--only-writer` では調査を行わないため、`--base-date`、`--window-days`、
+`--writer-mode` では調査を行わないため、`--base-date`、`--window-days`、
 `--max-log-runs` は使用しません。`--dry-run` と組み合わせた場合、
-`--only-researcher` は調査ログを保存せず、`--only-writer` は記事を標準出力にだけ表示します。
+`--researcher-mode` は調査ログを保存せず、`--writer-mode` は記事を標準出力にだけ表示します。
 
 ### 調査ログの件数キャップ
 
@@ -164,13 +164,13 @@ python -m app --max-log-runs 5
 MAX_LOG_RUNS=5 python -m app
 
 # 上限なし(すべての調査ログを渡す)
-python -m app --max-log-runs 0
+python -m app --max-log-runs -1
 ```
 
 上限を設けているのは、全履歴を結合するとAgentへの入力が際限なく膨らみ、プロンプト長の
 上限やコストを圧迫するためです。上限を超えた分は古い調査回から除外されます
 (除外した件数は `INFO` ログに出ます)。除外されたファイル自体は削除されないため、
-`--max-log-runs 0` を指定すれば再び全件を渡せます。
+`--max-log-runs -1` を指定すれば再び全件を渡せます。
 
 なお、キャップから外れた古い項目は照合対象に入らないため、その項目が再び見つかった
 場合は「新規」として再報告されることがあります。
@@ -186,7 +186,7 @@ python -m app --max-log-runs 0
 python -m app --log-level INFO
 
 # 環境変数でも指定できる(CLIオプションが優先)
-OOD_LOG_LEVEL=INFO python -m app
+LOG_LEVEL=INFO python -m app
 ```
 
 大文字小文字は区別しません(`info` でも可)。不正な値を指定した場合は警告を出して
@@ -247,7 +247,7 @@ OpenAI API の呼び出しが失敗した場合、スタックトレースでは
 
 調査には成功したが記事執筆で失敗した場合、その調査回のログファイルの保存は
 すでに完了しています(調査結果を失わないため、保存は記事執筆より先に行います)。
-この状態では `python -m app --only-writer` を実行すると、保存済みの最新の調査結果を使って
+この状態では `python -m app --writer-mode` を実行すると、保存済みの最新の調査結果を使って
 記事執筆だけを再試行できます。
 
 Slack投稿に失敗した場合は終了コード1を返します。ローカルのログとレポートファイルは

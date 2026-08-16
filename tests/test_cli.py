@@ -21,14 +21,7 @@ from tests.factories import make_entry as _make_entry
 @pytest.fixture(autouse=True)
 def _clear_optional_env(monkeypatch):
     """実行環境の任意設定がテスト結果に影響しないよう、未設定(既定値)の状態に揃える。"""
-    for name in (
-        "OOD_LOG_LEVEL",
-        "BASE_DATE",
-        "WINDOW_DAYS",
-        "SLACK_WEBHOOK_URL",
-        "LOGDIR",
-        "OUTDIR",
-    ):
+    for name in ("LOG_LEVEL", "BASE_DATE", "WINDOW_DAYS", "SLACK_WEBHOOK_URL", "LOGDIR", "OUTDIR"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -193,11 +186,16 @@ class TestResolveMaxLogRuns:
         # パターン: 明示的な件数を指定したときはその値を使う
         assert ood.resolve_max_log_runs(3) == 3
 
-    def test_zero_or_negative_means_unlimited(self):
+    def test_zero_is_used_as_limit(self):
         # 対象: resolve_max_log_runs
-        # パターン: 0以下は「上限なし」を意味する0に正規化する
+        # パターン: 0は読み込み件数0件の上限として使う
         assert ood.resolve_max_log_runs(0) == 0
-        assert ood.resolve_max_log_runs(-5) == 0
+
+    def test_negative_means_unlimited(self):
+        # 対象: resolve_max_log_runs
+        # パターン: -1以下は「上限なし」を意味する-1に正規化する
+        assert ood.resolve_max_log_runs(-1) == -1
+        assert ood.resolve_max_log_runs(-5) == -1
 
 
 class TestListLogFiles:
@@ -213,12 +211,19 @@ class TestListLogFiles:
         _write_log_file(tmp_path, "20260813_0930", [])
         (tmp_path / "notes.json").write_text("{}", encoding="utf-8")
 
-        paths = ood.list_log_files(tmp_path, 0)
+        paths = ood.list_log_files(tmp_path, -1)
 
         assert [path.name for path in paths] == [
             "ood_research_log_20260813_0930.json",
             "ood_research_log_20260814_0930.json",
         ]
+
+    def test_zero_returns_no_files(self, tmp_path):
+        # 対象: list_log_files
+        # パターン: 上限が0の場合はログファイルを読み込まない
+        _write_log_file(tmp_path, "20260813_0930", [])
+
+        assert ood.list_log_files(tmp_path, 0) == []
 
     def test_keeps_newest_runs_when_cap_is_exceeded(self, tmp_path):
         # 対象: list_log_files
@@ -492,15 +497,15 @@ class TestMainNoNewInformation:
 
 
 class TestExecutionModes:
-    def test_only_researcher_saves_log_without_writing_article(self, monkeypatch, tmp_path, capsys):
+    def test_researcher_mode_saves_log_without_writing_article(self, monkeypatch, tmp_path, capsys):
         # 対象: main
-        # パターン: --only-researcher指定時、調査ログだけを保存し執筆と記事出力を行わない
+        # パターン: --researcher-mode指定時、調査ログだけを保存し執筆と記事出力を行わない
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, report, "記事本文")
-        monkeypatch.setattr(sys, "argv", ["app", "--only-researcher"])
+        monkeypatch.setattr(sys, "argv", ["app", "--researcher-mode"])
 
         assert ood.main() == 0
 
@@ -509,11 +514,11 @@ class TestExecutionModes:
         assert capsys.readouterr().out == ""
         assert not (tmp_path / "output").exists()
 
-    def test_only_writer_uses_latest_log_without_running_researcher(
+    def test_writer_mode_uses_latest_log_without_running_researcher(
         self, monkeypatch, tmp_path, capsys
     ):
         # 対象: main
-        # パターン: --only-writer指定時、最新の調査ログだけを使って執筆し、調査は行わない
+        # パターン: --writer-mode指定時、最新の調査ログだけを使って執筆し、調査は行わない
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
@@ -525,7 +530,7 @@ class TestExecutionModes:
         captured = {}
 
         def _must_not_research(*args, **kwargs):
-            raise AssertionError("--only-writer指定時に調査が実行された")
+            raise AssertionError("--writer-mode指定時に調査が実行された")
 
         def _write_article(model, report, max_turns):
             captured["model"] = model
@@ -534,7 +539,7 @@ class TestExecutionModes:
 
         monkeypatch.setattr(ood, "run_researcher", _must_not_research)
         monkeypatch.setattr(ood, "write_article", _write_article)
-        monkeypatch.setattr(sys, "argv", ["app", "--only-writer", "--writer-model", "gpt-writer"])
+        monkeypatch.setattr(sys, "argv", ["app", "--writer-mode", "--writer-model", "gpt-writer"])
 
         assert ood.main() == 0
 
@@ -547,7 +552,7 @@ class TestExecutionModes:
         report_files = list((tmp_path / "output").glob("report_*.md"))
         assert len(report_files) == 1
 
-    def test_only_writer_uses_specified_research_result(self, monkeypatch, tmp_path):
+    def test_writer_mode_uses_specified_research_result(self, monkeypatch, tmp_path):
         # 対象: main
         # パターン: --research-result指定時、最新ログではなく指定したJSONを使って執筆する
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -561,7 +566,7 @@ class TestExecutionModes:
         captured_titles = []
 
         def _must_not_research(*args, **kwargs):
-            raise AssertionError("--only-writer指定時に調査が実行された")
+            raise AssertionError("--writer-mode指定時に調査が実行された")
 
         def _write_article(model, report, max_turns):
             captured_titles.extend(entry.title for entry in report.entries)
@@ -570,13 +575,13 @@ class TestExecutionModes:
         monkeypatch.setattr(ood, "run_researcher", _must_not_research)
         monkeypatch.setattr(ood, "write_article", _write_article)
         monkeypatch.setattr(
-            sys, "argv", ["app", "--only-writer", "--research-result", str(selected_path)]
+            sys, "argv", ["app", "--writer-mode", "--research-result", str(selected_path)]
         )
 
         assert ood.main() == 0
         assert captured_titles == ["指定した調査"]
 
-    def test_only_writer_does_not_fall_back_when_specified_result_is_missing(
+    def test_writer_mode_does_not_fall_back_when_specified_result_is_missing(
         self, monkeypatch, tmp_path, capsys
     ):
         # 対象: main
@@ -592,15 +597,15 @@ class TestExecutionModes:
         monkeypatch.setattr(ood, "run_researcher", _must_not_run)
         monkeypatch.setattr(ood, "write_article", _must_not_run)
         monkeypatch.setattr(
-            sys, "argv", ["app", "--only-writer", "--research-result", str(missing_path)]
+            sys, "argv", ["app", "--writer-mode", "--research-result", str(missing_path)]
         )
 
         assert ood.main() == 1
         assert str(missing_path) in capsys.readouterr().err
 
-    def test_only_writer_without_log_returns_error(self, monkeypatch, tmp_path, capsys):
+    def test_writer_mode_without_log_returns_error(self, monkeypatch, tmp_path, capsys):
         # 対象: main
-        # パターン: --only-writer指定時に調査ログがなければAgentを実行せずエラー終了する
+        # パターン: --writer-mode指定時に調査ログがなければAgentを実行せずエラー終了する
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
 
@@ -609,13 +614,21 @@ class TestExecutionModes:
 
         monkeypatch.setattr(ood, "run_researcher", _must_not_run)
         monkeypatch.setattr(ood, "write_article", _must_not_run)
-        monkeypatch.setattr(sys, "argv", ["app", "--only-writer"])
+        monkeypatch.setattr(sys, "argv", ["app", "--writer-mode"])
 
         assert ood.main() == 1
         assert "No research log found" in capsys.readouterr().err
 
 
 class TestParseArguments:
+    def test_help_descriptions_are_english(self):
+        # 対象: build_parser
+        # パターン: CLIの概要と各コマンド引数の説明が英語で表示される
+        help_text = ood.build_parser().format_help()
+
+        assert help_text.isascii()
+        assert "Collect and report the latest Open OnDemand news" in help_text
+
     def test_parses_cli_values(self, monkeypatch):
         # 対象: build_parser
         # パターン: 指定したCLI引数がNamespaceに格納される
@@ -669,7 +682,7 @@ class TestParseArguments:
     def test_writer_model_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --writer-model未指定かつ環境変数なしの場合、Noneになる
-        monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
+        monkeypatch.delenv("WRITER_MODEL", raising=False)
         monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().writer_model is None
 
@@ -699,21 +712,21 @@ class TestParseArguments:
     def test_log_level_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --log-level未指定かつ環境変数なしの場合、None(=既定値扱い)になる
-        monkeypatch.delenv("OOD_LOG_LEVEL", raising=False)
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
         monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().log_level is None
 
     def test_log_level_reads_environment_variable(self, monkeypatch):
         # 対象: build_parser
-        # パターン: 環境変数 OOD_LOG_LEVEL が既定値として使われる
-        monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
+        # パターン: 環境変数 LOG_LEVEL が既定値として使われる
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().log_level == "DEBUG"
 
     def test_cli_log_level_overrides_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数より --log-level の指定が優先される
-        monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         monkeypatch.setattr(sys, "argv", ["app", "--log-level", "ERROR"])
         assert ood.build_parser().parse_args().log_level == "ERROR"
 
@@ -725,7 +738,7 @@ class TestParseArguments:
 
     @pytest.mark.parametrize(
         ("option", "attribute"),
-        [("--only-researcher", "only_researcher"), ("--only-writer", "only_writer")],
+        [("--researcher-mode", "researcher_mode"), ("--writer-mode", "writer_mode")],
     )
     def test_execution_mode_option_is_enabled(self, monkeypatch, option, attribute):
         # 対象: build_parser
@@ -739,29 +752,29 @@ class TestParseArguments:
         # パターン: 単独実行オプションが無指定なら、従来どおり調査と執筆の両方が有効になる
         monkeypatch.setattr(sys, "argv", ["app"])
         args = ood.build_parser().parse_args()
-        assert args.only_researcher is False
-        assert args.only_writer is False
+        assert args.researcher_mode is False
+        assert args.writer_mode is False
 
     def test_execution_mode_options_are_mutually_exclusive(self, monkeypatch):
         # 対象: build_parser
-        # パターン: --only-researcherと--only-writerを同時に指定するとパースエラーになる
-        monkeypatch.setattr(sys, "argv", ["app", "--only-researcher", "--only-writer"])
+        # パターン: --researcher-modeと--writer-modeを同時に指定するとパースエラーになる
+        monkeypatch.setattr(sys, "argv", ["app", "--researcher-mode", "--writer-mode"])
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
 
-    def test_research_result_is_available_with_only_writer(self, monkeypatch):
+    def test_research_result_is_available_with_writer_mode(self, monkeypatch):
         # 対象: parse_arguments
-        # パターン: --only-writerとの併用時、指定した調査結果JSONのパスを受け付ける
+        # パターン: --writer-modeとの併用時、指定した調査結果JSONのパスを受け付ける
         monkeypatch.setattr(
-            sys, "argv", ["app", "--only-writer", "--research-result", "logs/research.json"]
+            sys, "argv", ["app", "--writer-mode", "--research-result", "logs/research.json"]
         )
         args = ood.parse_arguments()
         assert args.research_result == Path("logs/research.json")
 
-    @pytest.mark.parametrize("execution_option", [None, "--only-researcher"])
-    def test_research_result_requires_only_writer(self, monkeypatch, execution_option):
+    @pytest.mark.parametrize("execution_option", [None, "--researcher-mode"])
+    def test_research_result_requires_writer_mode(self, monkeypatch, execution_option):
         # 対象: parse_arguments
-        # パターン: --only-writerなしで--research-resultを指定するとパースエラーになる
+        # パターン: --writer-modeなしで--research-resultを指定するとパースエラーになる
         arguments = ["app", "--research-result", "logs/research.json"]
         if execution_option is not None:
             arguments.insert(1, execution_option)
@@ -1129,7 +1142,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
+        monkeypatch.delenv("WRITER_MODEL", raising=False)
         fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(sys, "argv", ["app", "--model", "gpt-test"])

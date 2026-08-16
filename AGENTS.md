@@ -30,12 +30,12 @@ CLI エージェント。
   - `__main__.py`: `python -m app` の実行エントリポイント。
   - `cli.py`: 期間・ログ・出力・エラー処理を担い、調査担当と執筆担当を接続する。
     - `setup_logging`: ログレベルを解決して設定する（`--log-level` / 環境変数
-      `OOD_LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。
+      `LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。
     - `resolve_base_date`: 調査対象期間の基準日を決定する（`--base-date` / 環境変数
       `BASE_DATE`、未指定なら実行日）。書式不正は `ValueError` にする。
     - `resolve_log_dir` / `resolve_max_log_runs` / `log_file_path` / `list_log_files`:
       調査ログの保存先（環境変数 `LOGDIR`）、読み込む調査回数の上限（`--max-log-runs` /
-      環境変数 `MAX_LOG_RUNS`、既定は 10、0 以下で上限なし）、調査回ごとのファイル名、
+      環境変数 `MAX_LOG_RUNS`、既定は 10、-1 以下で上限なし）、調査回ごとのファイル名、
       読み込み対象ファイルの一覧を決める。
     - `read_log_entries` / `load_log` / `append_log`: 調査ログは調査回ごとに 1 ファイル
       （`ood_research_log_YYYYMMDD_HHMM.json`）とし、`append_log` は既存ファイルへ追記せず

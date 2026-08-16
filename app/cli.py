@@ -31,15 +31,15 @@ $LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.
 
     # 進捗を表示する場合(既定のログレベルは WARNING)
     python -m app --log-level INFO
-    OOD_LOG_LEVEL=INFO python -m app
+    LOG_LEVEL=INFO python -m app
 
     # APIで調査・記事執筆を行い、結果を標準出力にだけ表示する場合
     python -m app --dry-run
 
     # 調査または執筆の一方だけを行う場合
-    python -m app --only-researcher
-    python -m app --only-writer
-    python -m app --only-writer --research-result ./logs/research.json
+    python -m app --researcher-mode
+    python -m app --writer-mode
+    python -m app --writer-mode --research-result ./logs/research.json
 """
 
 from __future__ import annotations
@@ -171,17 +171,17 @@ def resolve_max_log_runs(max_log_runs: int | None) -> int:
 
     [実装理由] 調査回ごとにログを分割すると実行を重ねるほどファイルが増え、全件を連結すると
     Agentへの入力が際限なく膨らんでプロンプト長の上限やコストを圧迫する。読み込む調査回数に上限を
-    設けることで、入力量を運用側で抑えられるようにしている。0以下を「上限なし」として扱うのは、
+    設けることで、入力量を運用側で抑えられるようにしている。-1以下を「上限なし」として扱うのは、
     照合のために全履歴を渡したい運用を、別のフラグを増やさずに表現できるようにするためである。
 
     Args:
         max_log_runs: 読み込む調査回数の上限。Noneの場合は既定値を使う。
 
     Returns:
-        読み込む調査回数の上限。0以下の場合は上限なしを意味する0を返す。
+        読み込む調査回数の上限。-1以下の場合は上限なしを意味する-1を返す。
     """
     resolved = DEFAULT_MAX_LOG_RUNS if max_log_runs is None else max_log_runs
-    return max(resolved, 0)
+    return max(resolved, -1)
 
 
 def log_file_path(log_dir: Path, run_at: datetime) -> Path:
@@ -213,7 +213,7 @@ def list_log_files(log_dir: Path, max_log_runs: int) -> list[Path]:
 
     Args:
         log_dir: 調査ログを格納するディレクトリ。
-        max_log_runs: 読み込む調査回数の上限。0以下の場合は上限を設けない。
+        max_log_runs: 読み込む調査回数の上限。-1以下の場合は上限を設けない。
 
     Returns:
         読み込む対象のログファイルのパス。古い順に並ぶ。存在しない場合は空リスト。
@@ -221,7 +221,7 @@ def list_log_files(log_dir: Path, max_log_runs: int) -> list[Path]:
     if not log_dir.is_dir():
         return []
     paths = sorted(path for path in log_dir.glob(LOG_FILE_GLOB) if path.is_file())
-    if max_log_runs > 0 and len(paths) > max_log_runs:
+    if max_log_runs >= 0 and len(paths) > max_log_runs:
         skipped = len(paths) - max_log_runs
         logger.info(
             "Found %d research logs; loading the newest %d and excluding %d older logs",
@@ -229,7 +229,7 @@ def list_log_files(log_dir: Path, max_log_runs: int) -> list[Path]:
             max_log_runs,
             skipped,
         )
-        paths = paths[-max_log_runs:]
+        paths = paths[len(paths) - max_log_runs :]
     return paths
 
 
@@ -300,7 +300,7 @@ def load_writer_report(
     return OODReport(entries=read_log_entries(path)), path
 
 
-def load_log(log_dir: Path, max_log_runs: int = 0) -> str:
+def load_log(log_dir: Path, max_log_runs: int = -1) -> str:
     """調査回ごとのログファイルを結合し、entriesだけをフラットなMarkdownとして読み込む。
 
     [実装理由] 調査担当Agentが照合に必要とするのは過去の項目情報だけであり、調査日時や対象期間を
@@ -312,7 +312,7 @@ def load_log(log_dir: Path, max_log_runs: int = 0) -> str:
 
     Args:
         log_dir: 調査ログを格納するディレクトリ。
-        max_log_runs: 読み込む調査回数の上限。0以下の場合は上限を設けない。
+        max_log_runs: 読み込む調査回数の上限。-1以下の場合は上限を設けない。
 
     Returns:
         過去のentriesをフラットにしたMarkdown。項目が1件もない場合は項目なしの文言。
@@ -464,74 +464,81 @@ def build_parser() -> argparse.ArgumentParser:
     Returns:
         CLI引数が定義されたArgumentParser。
     """
-    parser = argparse.ArgumentParser(description="Open OnDemand 最新情報収集エージェント")
+    parser = argparse.ArgumentParser(description="Collect and report the latest Open OnDemand news")
     parser.add_argument(
         "--model",
-        default=os.environ.get("OOD_AGENT_MODEL", "gpt-5.4"),
-        help="使用するモデル (既定: gpt-5.4。WebSearchTool対応モデルを指定すること)",
+        default=os.environ.get("AGENT_MODEL", "gpt-5.4"),
+        help=(
+            "model used for research; must support WebSearchTool (default: AGENT_MODEL or gpt-5.4)"
+        ),
     )
     parser.add_argument(
         "--writer-model",
-        default=os.environ.get("OOD_WRITER_MODEL"),
+        default=os.environ.get("WRITER_MODEL"),
         help=(
-            "記事執筆に使うWebSearchTool対応モデル "
-            "(既定: 環境変数 OOD_WRITER_MODEL、未設定なら --model と同じ)"
+            "model used for article writing; must support WebSearchTool "
+            "(default: WRITER_MODEL or --model)"
         ),
     )
     parser.add_argument(
         "--window-days",
         type=int,
         default=os.environ.get("WINDOW_DAYS"),
-        help=f"調査対象期間(日数) (既定: 環境変数 WINDOW_DAYS、未設定なら{DEFAULT_WINDOW_DAYS}日)",
+        help=f"research window in days (default: WINDOW_DAYS or {DEFAULT_WINDOW_DAYS})",
     )
     parser.add_argument(
         "--max-log-runs",
         type=int,
         default=os.environ.get("MAX_LOG_RUNS"),
         help=(
-            "調査担当Agentへ渡す過去の調査ログの件数(調査回数)の上限。0以下で上限なし "
-            f"(既定: 環境変数 MAX_LOG_RUNS、未設定なら{DEFAULT_MAX_LOG_RUNS}回)"
+            "maximum number of past research runs passed to the researcher Agent; "
+            f"-1 or lower means unlimited (default: MAX_LOG_RUNS or {DEFAULT_MAX_LOG_RUNS})"
         ),
     )
     parser.add_argument(
         "--base-date",
         default=os.environ.get("BASE_DATE"),
         help=(
-            "調査対象期間の基準日(YYYY-MM-DD)。この日を終端とし、--window-days 日前までを"
-            "対象とする (既定: 環境変数 BASE_DATE、未設定なら実行日)"
+            "end date of the research period in YYYY-MM-DD format; includes the preceding "
+            "--window-days days (default: BASE_DATE or the execution date)"
         ),
     )
     parser.add_argument(
         "--log-level",
-        default=os.environ.get("OOD_LOG_LEVEL"),
-        help=(
-            f"ログの出力レベル ({'/'.join(LOG_LEVELS)}) "
-            f"(既定: 環境変数 OOD_LOG_LEVEL、未設定なら {DEFAULT_LOG_LEVEL})"
-        ),
+        default=os.environ.get("LOG_LEVEL"),
+        help=(f"log level ({'/'.join(LOG_LEVELS)}) (default: LOG_LEVEL or {DEFAULT_LOG_LEVEL})"),
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="APIによる調査・記事執筆は行い、調査ログ保存・レポート保存・Slack投稿は行わない",
+        help=(
+            "run research and article writing without saving research logs or reports, "
+            "or posting to Slack"
+        ),
     )
     execution_group = parser.add_mutually_exclusive_group()
     execution_group.add_argument(
-        "--only-researcher",
+        "--researcher-mode",
         action="store_true",
-        help="調査と調査ログの保存だけを行い、記事執筆は行わない",
+        help="run research and save the research log without writing an article",
     )
     execution_group.add_argument(
-        "--only-writer",
+        "--writer-mode",
         action="store_true",
-        help="調査結果JSONを使った記事執筆だけを行い、調査は行わない",
+        help="write an article from research result JSON without running research",
     )
     parser.add_argument(
         "--research-result",
         type=Path,
         metavar="PATH",
-        help="記事執筆に使う調査結果JSON (--only-writer指定時のみ。未指定なら最新ログ)",
+        help=(
+            "research result JSON used for article writing; valid only with --writer-mode "
+            "(default: latest research log)"
+        ),
     )
-    parser.add_argument("--max-turns", type=int, default=40)
+    parser.add_argument(
+        "--max-turns", type=int, default=40, help="maximum number of Agent turns (default: 40)"
+    )
     return parser
 
 
@@ -547,8 +554,8 @@ def parse_arguments() -> argparse.Namespace:
     """
     parser = build_parser()
     args = parser.parse_args()
-    if args.research_result is not None and not args.only_writer:
-        parser.error("--research-result can only be used with --only-writer")
+    if args.research_result is not None and not args.writer_mode:
+        parser.error("--research-result can only be used with --writer-mode")
     return args
 
 
@@ -664,7 +671,7 @@ def run_writer_agent(
         logger.error(
             "Article writing failed. %s\n"
             "(The research results are available at %s. Retry article writing with "
-            "--only-writer.)",
+            "--writer-mode.)",
             describe_api_error(e),
             log_path,
         )
@@ -756,14 +763,14 @@ def main() -> int:
     log_dir = resolve_log_dir()
     run_at = datetime.now()
 
-    if args.only_writer:
+    if args.writer_mode:
         selected = load_writer_report(log_dir, args.research_result)
         if selected is None and args.research_result is not None:
             logger.error("Research result JSON not found: %s", args.research_result)
             return 1
         if selected is None:
             logger.error(
-                "No research log found in %s. Run the researcher before using --only-writer.",
+                "No research log found in %s. Run the researcher before using --writer-mode.",
                 log_dir,
             )
             return 1
@@ -794,7 +801,7 @@ def main() -> int:
         if log_path is not None:
             logger.info("Saved %d entries to research log %s", len(report.entries), log_path)
 
-    if args.only_researcher:
+    if args.researcher_mode:
         if args.dry_run:
             logger.info("Dry run: skipping research log storage")
         return 0
