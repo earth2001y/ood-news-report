@@ -44,7 +44,7 @@ def build_writer_agent(model: str, categories: list[str] | None = None) -> Agent
         category_descriptions=CATEGORY_DESCRIPTIONS,
     )
     return Agent(
-        name="OOD News Writer",
+        "OOD News Writer",
         instructions=instructions,
         model=model,
         tools=[WebSearchTool(search_context_size="medium")],
@@ -95,6 +95,6 @@ def write_article(model: str, report: OODReport, max_turns: int) -> str:
     ]
     agent = build_writer_agent(model, categories)
     prompt = build_writer_prompt(report)
-    result = Runner.run_sync(agent, input=prompt, max_turns=max_turns)
+    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
     article: OODArticle = result.final_output
     return article.article_markdown

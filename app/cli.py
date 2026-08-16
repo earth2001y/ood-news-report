@@ -309,12 +309,7 @@ def load_log(log_dir: Path, max_log_runs: int = 0) -> str:
 
 
 def append_log(
-    log_dir: Path,
-    run_at: datetime,
-    entries: list[ReportItem],
-    window_start: str,
-    base_date: str,
-    window_days: int,
+    log_dir: Path, run_at: datetime, entries: list[ReportItem], period: ResearchPeriod
 ) -> Path | None:
     """今回「新規」「更新」と判定された項目を、この調査回のJSONログとして書き出す。
 
@@ -330,9 +325,7 @@ def append_log(
         log_dir: 調査ログを格納するディレクトリ。存在しない場合は作成する。
         run_at: 実行日時。ログファイル名(YYYYMMDD_HHMM)と記録の `datetime` に使う。
         entries: 今回「新規」または「更新」として報告した項目のリスト。
-        window_start: 調査期間の開始日(YYYY-MM-DD)。
-        base_date: 調査期間の終端日(YYYY-MM-DD)。
-        window_days: 調査期間の日数。
+        period: 調査対象期間（基準日・開始日・日数）。
 
     Returns:
         書き出したログファイルのパス。entriesが空で何も書き出さなかった場合はNone。
@@ -341,7 +334,11 @@ def append_log(
         return None
     record = {
         "datetime": run_at.isoformat(),
-        "period": {"start": window_start, "end": base_date, "days": window_days},
+        "period": {
+            "start": period["window_start"],
+            "end": period["base_date"],
+            "days": period["window_days"],
+        },
         "entries": [entry.model_dump() for entry in entries],
     }
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -532,12 +529,7 @@ def describe_api_error(error: APIError) -> str:
 
 
 def run_researcher_agent(
-    model: str,
-    existing_log: str,
-    base_date: date,
-    window_start: date,
-    window_days: int,
-    max_turns: int,
+    model: str, existing_log: str, period: ResearchPeriod, max_turns: int
 ) -> OODReport | None:
     """調査担当Agentを実行し、結果を返す。
 
@@ -548,24 +540,13 @@ def run_researcher_agent(
     Args:
         model: 調査担当Agentに使用するモデル名。
         existing_log: 過去に報告した項目のMarkdown。
-        base_date: 調査対象期間の基準日。
-        window_start: 調査対象期間の開始日。
-        window_days: 調査対象期間の日数。
+        period: 調査対象期間（基準日・開始日・日数）。
         max_turns: Agent実行の最大ターン数。
     """
-    period = f"{window_start.isoformat()} to {base_date.isoformat()}"
-    logger.info("Researching the latest Open OnDemand news... (period: %s)", period)
+    period_str = f"{period['window_start']} to {period['base_date']}"
+    logger.info("Researching the latest Open OnDemand news... (period: %s)", period_str)
     try:
-        return run_researcher(
-            model=model,
-            existing_log=existing_log,
-            period=ResearchPeriod(
-                base_date=base_date.isoformat(),
-                window_start=window_start.isoformat(),
-                window_days=window_days,
-            ),
-            max_turns=max_turns,
-        )
+        return run_researcher(model, existing_log, period, max_turns)
     except APIError as e:
         logger.error("Research failed. %s", describe_api_error(e))
         return None
@@ -606,7 +587,7 @@ def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: i
     """
     logger.info("Writing a newsletter article from the research results...")
     try:
-        article_markdown = write_article(model=model, report=report, max_turns=max_turns)
+        article_markdown = write_article(model, report, max_turns)
     except APIError as e:
         logger.error(
             "Article writing failed. %s\n"
@@ -675,23 +656,19 @@ def main() -> int:
 
     window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
     window_start = base_date - timedelta(days=window_days)
-    existing_log = load_log(log_dir, resolve_max_log_runs(args.max_log_runs))
-    report = run_researcher_agent(
-        args.model, existing_log, base_date, window_start, window_days, args.max_turns
+    period = ResearchPeriod(
+        base_date=base_date.isoformat(),
+        window_start=window_start.isoformat(),
+        window_days=window_days,
     )
+    existing_log = load_log(log_dir, resolve_max_log_runs(args.max_log_runs))
+    report = run_researcher_agent(args.model, existing_log, period, args.max_turns)
     if report is None:
         return 1
 
     log_path = None
     if not args.dry_run:
-        log_path = append_log(
-            log_dir,
-            run_at,
-            report.entries,
-            window_start.isoformat(),
-            base_date.isoformat(),
-            window_days,
-        )
+        log_path = append_log(log_dir, run_at, report.entries, period)
 
     if not report.entries:
         logger.info("No new information found; skipping newsletter article generation")

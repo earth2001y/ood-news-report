@@ -13,6 +13,7 @@ from openai import APIConnectionError, RateLimitError
 
 import app.cli as ood
 from app.news_models import OODReport
+from app.researcher import ResearchPeriod
 from tests.factories import make_entry as _make_entry
 
 
@@ -50,12 +51,12 @@ def _stub_agents(monkeypatch, report, article_markdown):
     """main が呼び出す調査・執筆モジュールをモックに置き換え、モデル名を記録する。"""
     models = {}
 
-    def _run_researcher(**kwargs):
-        models["researcher"] = kwargs["model"]
+    def _run_researcher(model, existing_log, period, max_turns):
+        models["researcher"] = model
         return report
 
-    def _write_article(**kwargs):
-        models["writer"] = kwargs["model"]
+    def _write_article(model, report, max_turns):
+        models["writer"] = model
         return article_markdown
 
     monkeypatch.setattr(ood, "run_researcher", _run_researcher)
@@ -290,7 +291,10 @@ class TestAppendLog:
         # 対象: append_log
         # パターン: entriesが空の場合、調査回のファイルを作成せずNoneを返す
         path = ood.append_log(
-            tmp_path, datetime(2026, 8, 13, 9, 30), [], "2026-07-14", "2026-08-13", 30
+            tmp_path,
+            datetime(2026, 8, 13, 9, 30),
+            [],
+            ResearchPeriod(base_date="2026-08-13", window_start="2026-07-14", window_days=30),
         )
         assert path is None
         assert list(tmp_path.glob("*.json")) == []
@@ -300,7 +304,10 @@ class TestAppendLog:
         # パターン: 調査回ごとに実行日時を含む名前のファイルを作り、対象期間を記録する
         log_dir = tmp_path / "logs"
         path = ood.append_log(
-            log_dir, datetime(2026, 8, 13, 9, 30), [_make_entry()], "2026-07-14", "2026-08-13", 30
+            log_dir,
+            datetime(2026, 8, 13, 9, 30),
+            [_make_entry()],
+            ResearchPeriod(base_date="2026-08-13", window_start="2026-07-14", window_days=30),
         )
         assert path == log_dir / "ood_research_log_20260813_0930.json"
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -315,17 +322,13 @@ class TestAppendLog:
             tmp_path,
             datetime(2026, 8, 13, 9, 30),
             [_make_entry(title="v3.0.0")],
-            "2026-07-14",
-            "2026-08-13",
-            30,
+            ResearchPeriod(base_date="2026-08-13", window_start="2026-07-14", window_days=30),
         )
         second = ood.append_log(
             tmp_path,
             datetime(2026, 8, 14, 10, 0),
             [_make_entry(title="v3.1.0", item_date="")],
-            "2026-07-15",
-            "2026-08-14",
-            30,
+            ResearchPeriod(base_date="2026-08-14", window_start="2026-07-15", window_days=30),
         )
 
         assert first != second
@@ -341,17 +344,13 @@ class TestAppendLog:
             tmp_path,
             datetime(2026, 8, 13, 9, 30),
             [_make_entry(title="v3.0.0")],
-            "2026-07-14",
-            "2026-08-13",
-            30,
+            ResearchPeriod(base_date="2026-08-13", window_start="2026-07-14", window_days=30),
         )
         path = ood.append_log(
             tmp_path,
             datetime(2026, 8, 13, 9, 30),
             [_make_entry(title="v3.1.0")],
-            "2026-07-14",
-            "2026-08-13",
-            30,
+            ResearchPeriod(base_date="2026-08-13", window_start="2026-07-14", window_days=30),
         )
 
         assert len(list(tmp_path.glob("ood_research_log_*.json"))) == 1
@@ -365,7 +364,10 @@ class TestAppendLog:
             _make_entry(category="new_release", title="v3.1.0"),
         ]
         path = ood.append_log(
-            tmp_path, datetime(2026, 8, 13, 9, 30), entries, "2026-07-14", "2026-08-13", 30
+            tmp_path,
+            datetime(2026, 8, 13, 9, 30),
+            entries,
+            ResearchPeriod(base_date="2026-08-13", window_start="2026-07-14", window_days=30),
         )
         record = json.loads(path.read_text(encoding="utf-8"))
         assert [entry["category"] for entry in record["entries"]] == [
@@ -378,7 +380,10 @@ class TestAppendLog:
         # パターン: status="updated"の項目がchange_note付きで記録される
         entry = _make_entry(status="updated", change_note="深刻度がCriticalに変更")
         path = ood.append_log(
-            tmp_path, datetime(2026, 8, 13, 9, 30), [entry], "2026-07-14", "2026-08-13", 30
+            tmp_path,
+            datetime(2026, 8, 13, 9, 30),
+            [entry],
+            ResearchPeriod(base_date="2026-08-13", window_start="2026-07-14", window_days=30),
         )
         record = json.loads(path.read_text(encoding="utf-8"))
         assert record["entries"][0]["status"] == "updated"
@@ -734,8 +739,15 @@ class TestMain:
 
         empty_report = OODReport(entries=[])
 
-        def _run_researcher(**kwargs):
-            captured_input.update(kwargs)
+        def _run_researcher(model, existing_log, period, max_turns):
+            captured_input.update(
+                {
+                    "model": model,
+                    "existing_log": existing_log,
+                    "period": period,
+                    "max_turns": max_turns,
+                }
+            )
             return empty_report
 
         monkeypatch.setattr(ood, "run_researcher", _run_researcher)
@@ -880,7 +892,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
-        monkeypatch.setattr(ood, "run_researcher", lambda **kwargs: _raise(_make_api_error()))
+        monkeypatch.setattr(ood, "run_researcher", lambda *args: _raise(_make_api_error()))
         monkeypatch.setattr(sys, "argv", ["app"])
 
         exit_code = ood.main()
@@ -901,7 +913,7 @@ class TestMain:
         log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
-        monkeypatch.setattr(ood, "run_researcher", lambda **kwargs: fake_report)
+        monkeypatch.setattr(ood, "run_researcher", lambda *args: fake_report)
         monkeypatch.setattr(ood, "write_article", lambda *a, **kw: _raise(_make_api_error()))
         monkeypatch.setattr(sys, "argv", ["app"])
 
@@ -996,8 +1008,8 @@ class TestMain:
         _write_log_file(log_dir, "20260814_0930", [_log_entry_dict(title="v3.1.0")])
         prompts = []
 
-        def _capture_research(**kwargs):
-            prompts.append(kwargs["existing_log"])
+        def _capture_research(model, existing_log, period, max_turns):
+            prompts.append(existing_log)
             return OODReport(entries=[])
 
         monkeypatch.setattr(ood, "run_researcher", _capture_research)

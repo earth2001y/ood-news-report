@@ -31,7 +31,7 @@ def build_researcher_agent(model: str) -> Agent:
     """
     instructions = render_template("researcher_instructions.j2")
     return Agent(
-        name="OOD News Reporter",
+        "OOD News Reporter",
         instructions=instructions,
         model=model,
         tools=[WebSearchTool(search_context_size="medium")],
@@ -76,6 +76,6 @@ def run_researcher(
     """
     agent = build_researcher_agent(model)
     prompt = build_researcher_prompt(existing_log, period)
-    result = Runner.run_sync(agent, input=prompt, max_turns=max_turns)
+    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
     report: OODReport = result.final_output
     return report

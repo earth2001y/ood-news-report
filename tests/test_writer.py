@@ -23,7 +23,7 @@ class TestBuildWriterAgent:
     def test_sets_model_output_type_and_web_search_tool(self):
         # 対象: build_writer_agent
         # パターン: 出力スキーマがOODArticleで、Web検索ツールを1つ持つ
-        agent = writer.build_writer_agent(model="gpt-test")
+        agent = writer.build_writer_agent("gpt-test")
         assert agent.model == "gpt-test"
         assert agent.output_type is OODArticle
         assert len(agent.tools) == 1
@@ -43,7 +43,7 @@ class TestWriteArticle:
         )
         report = OODReport(entries=[make_entry()])
 
-        article = writer.write_article(model="gpt-test", report=report, max_turns=12)
+        article = writer.write_article("gpt-test", report, 12)
 
         assert article == "# 記事本文"
 
@@ -63,7 +63,7 @@ class TestWriteArticle:
         monkeypatch.setattr(writer.Runner, "run_sync", _fake_run_sync)
         report = OODReport(entries=[make_entry()])
 
-        writer.write_article(model="gpt-test", report=report, max_turns=12)
+        writer.write_article("gpt-test", report, 12)
 
         assert "v3.1.0" in captured["input"]
         assert "## new_release" in captured["input"]
@@ -84,7 +84,7 @@ class TestWriteArticle:
         monkeypatch.setattr(writer.Runner, "run_sync", _fake_run_sync)
         report = OODReport(entries=[make_entry(category="community_event")])
 
-        writer.write_article(model="gpt-test", report=report, max_turns=12)
+        writer.write_article("gpt-test", report, 12)
 
         instructions = captured["instructions"]
         assert "1. Community events (`community_event`)" in instructions
@@ -109,7 +109,7 @@ class TestWriteArticle:
             ]
         )
 
-        writer.write_article(model="gpt-test", report=report, max_turns=12)
+        writer.write_article("gpt-test", report, 12)
 
         assert "Category: security" in captured["input"]
         assert "Status: updated" in captured["input"]
