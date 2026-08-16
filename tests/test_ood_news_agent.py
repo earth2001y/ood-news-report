@@ -274,6 +274,17 @@ class TestRenderTemplate:
         assert "補足情報獲得のためのWeb検索はしてよい" in rendered
         assert "事実の追加・推測・脚色は一切しない" in rendered
 
+    def test_writer_instructions_constrains_other_topic_title_and_relations(self):
+        # 対象: render_template("writer_instructions.j2")
+        # パターン: other_topicのみの場合の見出し制約と、項目間の関連への言及を指示する
+        rendered = ood.render_template(
+            "writer_instructions.j2",
+            categories=ood.CATEGORIES,
+            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
+        )
+        assert "更新カテゴリが other_topic だけの場合" in rendered
+        assert "各記事の間に関連がある場合" in rendered
+
     def test_writer_instructions_lists_only_target_categories(self):
         # 対象: render_template("writer_instructions.j2")
         # パターン: 執筆対象として渡したカテゴリだけが指示文に含まれる
