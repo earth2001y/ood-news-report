@@ -737,13 +737,13 @@ class TestParseArguments:
 
     def test_resolve_log_path_uses_default_log_directory(self, monkeypatch, tmp_path):
         # 対象: resolve_log_path
-        # パターン: LOGDIR未設定時は log ディレクトリを使い、存在しないなら作成する
+        # パターン: LOGDIR未設定時は .research_log ディレクトリを使い、存在しないなら作成する
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("LOGDIR", raising=False)
 
         log_path = ood.resolve_log_path()
 
-        assert log_path == tmp_path / "log" / "ood_research_log.json"
+        assert log_path == tmp_path / ".research_log" / "ood_research_log.json"
         assert log_path.parent.is_dir()
 
     def test_resolve_log_path_uses_environment_directory(self, monkeypatch, tmp_path):

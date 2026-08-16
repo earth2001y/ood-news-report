@@ -55,7 +55,8 @@ CLI エージェント。
 - `pyproject.toml`: ruff と pytest の設定。
 - `Makefile`: 開発用コマンド。
 
-`ood_research_log.json` と `output/` は実行時に生成され、Git の追跡対象外である。
+`.research_log/ood_research_log.json`（`LOGDIR` で変更可）と `output/` は実行時に
+生成され、Git の追跡対象外である。
 
 ## 実行環境
 

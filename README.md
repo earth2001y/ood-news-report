@@ -45,8 +45,10 @@ export OPENAI_API_KEY=sk-...
 export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ```
 
-`OPENAI_API_KEY` は `.env` ファイルに記載しても読み込まれます
-(`.env.example` をコピーして使ってください)。
+`OPENAI_API_KEY` をはじめとする環境変数は、`.env` ファイルに記載しても
+読み込まれます(`.env.example` をコピーして使ってください)。設定できる項目は
+「[コマンド引数](#コマンド引数)」と
+「[環境変数のみで指定する項目](#環境変数のみで指定する項目)」を参照してください。
 
 ## 実行方法
 
@@ -54,19 +56,33 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 python ood_news_agent.py
 ```
 
-### オプション
+### コマンド引数
 
-| オプション | デフォルト | 説明 |
+同じ項目をコマンド引数と環境変数の両方で指定した場合は、コマンド引数が優先され
+ます。デフォルト値は、どちらも指定しなかった場合の値です。
+
+| オプション | 環境変数 | デフォルト値 | 説明 |
+| --- | --- | --- | --- |
+| `--model` | `OOD_AGENT_MODEL` | `gpt-5.4` | 使用するモデル(WebSearchTool対応のResponses APIモデル) |
+| `--writer-model` | `OOD_WRITER_MODEL` | `--model` と同じ | 記事再構成に使うモデル(WebSearchTool対応モデル) |
+| `--window-days` | `WINDOW_DAYS` | `30` | 調査対象期間(日数) |
+| `--base-date` | `BASE_DATE` | 実行日 | 調査対象期間の基準日(`YYYY-MM-DD`)。この日を終端とする |
+| `--log-level` | `OOD_LOG_LEVEL` | `WARNING` | ログの出力レベル(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`) |
+| `--dry-run` | なし | 無効 | APIによる調査・記事再構成を行うが、ログ追記・レポート保存・Slack投稿は行わない |
+| `--max-turns` | なし | `40` | Agent実行の最大ターン数 |
+
+### 環境変数のみで指定する項目
+
+以下は対応するコマンド引数がなく、環境変数でのみ指定します。
+
+| 環境変数 | デフォルト値 | 説明 |
 | --- | --- | --- |
-| `LOGDIR` | `.log` | 報告済み項目ログの保存ディレクトリ(環境変数のみ) |
-| `--model` | `gpt-5.4` | 使用するモデル(WebSearchTool対応のResponses APIモデル) |
-| `--writer-model` | 環境変数 `OOD_WRITER_MODEL`、未設定なら `--model` と同じ | 記事再構成に使うモデル(WebSearchTool対応モデル) |
-| `OUTDIR` | `output` | レポートファイルの出力先ディレクトリ(環境変数のみ) |
-| `--window-days` | 環境変数 `WINDOW_DAYS`、未設定なら `30` | 調査対象期間(日数) |
-| `--base-date` | 環境変数 `BASE_DATE`、未設定なら実行日 | 調査対象期間の基準日(`YYYY-MM-DD`)。この日を終端とする |
-| `--log-level` | 環境変数 `OOD_LOG_LEVEL`、未設定なら `WARNING` | ログの出力レベル(`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`) |
-| `--dry-run` | 無効 | APIによる調査・記事再構成を行うが、ログ追記・レポート保存・Slack投稿は行わない |
-| `--max-turns` | `40` | Agent実行の最大ターン数 |
+| `OPENAI_API_KEY` | (必須) | OpenAI APIキー。Web検索機能が有効なキーが必要 |
+| `SLACK_WEBHOOK_URL` | 未設定 | 設定するとレポートをSlackへ投稿する |
+| `LOGDIR` | `.research_log` | 報告済み項目ログの保存ディレクトリ |
+| `OUTDIR` | `output` | レポートファイルの出力先ディレクトリ |
+
+環境変数はいずれも `.env` ファイルに記載できます(「セットアップ」を参照)。
 
 ### 調査対象期間
 
@@ -133,7 +149,7 @@ python ood_news_agent.py --dry-run
   (フォーマットの詳細は [docs/report_file_format.md](docs/report_file_format.md) 参照)
 - `$LOGDIR/ood_research_log.json`: 調査日時・調査対象期間・今回「新規」「更新」として報告した
   項目が実行日時ごとにJSON形式で追記される。
-  ディレクトリが存在しない場合は自動作成され、既定値は `.log` である。
+  ディレクトリが存在しない場合は自動作成され、既定値は `.research_log` である。
   記事ではなく調査担当Agentの構造化出力をそのまま記録するため、形式は従来から変わらない
   (フォーマットの詳細は [docs/ood_research_log_format.md](docs/ood_research_log_format.md) 参照)
 

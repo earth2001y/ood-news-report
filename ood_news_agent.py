@@ -149,14 +149,15 @@ def resolve_log_path() -> Path:
 
     [実装理由] ログ保存先をCLI引数で変えられる仕組みは、運用が不安定になりやすく、同じ環境で
     実行される複数プロセスがログを混ぜてしまうリスクがある。環境変数 LOGDIR を使うことで、実行
-    環境ごとに保存先を切り替えやすくし、デフォルト値 `log` に統一することで簡潔な運用にしている。
+    環境ごとに保存先を切り替えやすくし、デフォルト値 `.research_log` に統一することで簡潔な運用に
+    している。
     ディレクトリが未作成でも自動で作るのは、ログの出力先が事前に存在しないことが多く、手動作成を
     必要とすると再実行のたびに失敗するためである。
 
     Returns:
         ログファイルのパス。ディレクトリは自動作成する。
     """
-    log_dir = Path(os.environ.get("LOGDIR", "log")).expanduser()
+    log_dir = Path(os.environ.get("LOGDIR", ".research_log")).expanduser()
     if not log_dir.is_absolute():
         log_dir = Path.cwd() / log_dir
     log_dir.mkdir(parents=True, exist_ok=True)

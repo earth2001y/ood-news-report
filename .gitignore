@@ -219,4 +219,4 @@ __marimo__/
 
 # Agent実行ログ・レポート出力(実行環境ごとにローカルで蓄積するため追跡しない)
 /output/
-/log/
+/.research_log/
