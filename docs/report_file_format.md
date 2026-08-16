@@ -10,7 +10,7 @@
 生成する箇条書き中心の報告文は、執筆担当Agentへの入力としてのみ使われ、ファイルにも
 標準出力にも現れません。
 
-`ood_research_log.json`(既報告項目ログ、[docs/ood_research_log_format.md](ood_research_log_format.md)
+調査ログ(`ood_research_log_*.json`、[docs/ood_research_log_format.md](ood_research_log_format.md)
 参照)とは別物です。レポートファイルは「その回の実行で得られた最終的な報告文」の
 スナップショットであり、過去の実行分と統合・追記されることはありません。
 
@@ -138,17 +138,18 @@ Discourse では、Slurm クラスタでの対話型アプリのジョブ投入�
 多少ゆれる(厳密なテンプレート出力ではなく、指示に沿った自然文生成であるため)。
 上記は一例であり、完全に固定されたテンプレートではない。
 
-## ood_research_log.json との関係
+## 調査ログとの関係
 
 - 記事に書かれる「新規」「更新」の情報のうち、調査担当Agentが `entries` として
-  構造化出力したものが `ood_research_log.json` に実行日時・対象期間とともに追記される。ログの `entries` に書き込むのは
+  構造化出力したものが、その調査回の `ood_research_log_YYYYMMDD_HHMM.json` に実行日時・
+  対象期間とともに保存される。ログの `entries` に書き込むのは
   記事ではなく構造化出力であり、記事の文章表現に左右されない。
-- 記事の文章表現と `ood_research_log.json` の項目は、内容としては対応しているが、
+- 記事の文章表現と調査ログの項目は、内容としては対応しているが、
   書式(Markdownの構造・語順)と言語が異なる。調査結果は執筆担当Agentへ渡すまで英語で
   一貫しており、ログの `category` / `status` は `new_release` `new` のような英語の識別子、
   `summary` / `change_note` も英語である。記事の日本語(セクション見出しを含む)は
   執筆担当Agentが翻訳して生成する。Agent入力へ変換したMarkdownでは `[new]` `[updated]`
   の角括弧ラベルを使うが、記事側では使わない。
   突き合わせが必要な場合は実行日時
-  (レポートファイル名の `<YYYYMMDD>_<HHMM>` と、ログの見出し
-  `datetime` と `period`)で対応付ける。
+  (レポートファイル名の `<YYYYMMDD>_<HHMM>` と、同じタイムスタンプを持つ調査ログの
+  ファイル名、およびその `datetime` と `period`)で対応付ける。

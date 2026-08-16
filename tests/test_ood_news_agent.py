@@ -401,36 +401,124 @@ class TestRenderTemplate:
         assert "period" not in rendered
 
 
+def _write_log_file(log_dir, timestamp, entries):
+    """調査回1件分のログファイルを書き出すテスト用ヘルパ。"""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / f"ood_research_log_{timestamp}.json"
+    record = {
+        "datetime": "2026-08-13T09:30:00",
+        "period": {"start": "2026-07-14", "end": "2026-08-13", "days": 30},
+        "entries": entries,
+    }
+    path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _written_log_files(log_dir):
+    """調査回ごとに書き出されたログファイルを古い順に返すテスト用ヘルパ。"""
+    if not log_dir.is_dir():
+        return []
+    return sorted(log_dir.glob(ood.LOG_FILE_GLOB))
+
+
+def _log_entry_dict(**overrides):
+    """ログファイルへ書き込むentries 1件分の辞書を作るテスト用ヘルパ。"""
+    entry = {
+        "category": "new_release",
+        "status": "new",
+        "title": "v3.1.0",
+        "item_date": "2026-08-01",
+        "url": "https://example.com/v3.1.0",
+        "summary": "Adds new features.",
+        "change_note": "",
+    }
+    entry.update(overrides)
+    return entry
+
+
+class TestResolveMaxLogRuns:
+    def test_none_falls_back_to_default(self):
+        # 対象: resolve_max_log_runs
+        # パターン: 未指定のときは既定の調査回数上限を使う
+        assert ood.resolve_max_log_runs(None) == ood.DEFAULT_MAX_LOG_RUNS
+
+    def test_explicit_value_is_used(self):
+        # 対象: resolve_max_log_runs
+        # パターン: 明示的な件数を指定したときはその値を使う
+        assert ood.resolve_max_log_runs(3) == 3
+
+    def test_zero_or_negative_means_unlimited(self):
+        # 対象: resolve_max_log_runs
+        # パターン: 0以下は「上限なし」を意味する0に正規化する
+        assert ood.resolve_max_log_runs(0) == 0
+        assert ood.resolve_max_log_runs(-5) == 0
+
+
+class TestListLogFiles:
+    def test_missing_directory_returns_empty_list(self, tmp_path):
+        # 対象: list_log_files
+        # パターン: ログディレクトリが存在しない場合は空リストを返す
+        assert ood.list_log_files(tmp_path / "absent", 10) == []
+
+    def test_returns_matching_files_in_chronological_order(self, tmp_path):
+        # 対象: list_log_files
+        # パターン: 命名規則に一致するファイルだけを古い順に返す
+        _write_log_file(tmp_path, "20260814_0930", [])
+        _write_log_file(tmp_path, "20260813_0930", [])
+        (tmp_path / "notes.json").write_text("{}", encoding="utf-8")
+
+        paths = ood.list_log_files(tmp_path, 0)
+
+        assert [path.name for path in paths] == [
+            "ood_research_log_20260813_0930.json",
+            "ood_research_log_20260814_0930.json",
+        ]
+
+    def test_keeps_newest_runs_when_cap_is_exceeded(self, tmp_path):
+        # 対象: list_log_files
+        # パターン: 上限を超える場合は新しい調査回だけを残す
+        for timestamp in ("20260811_0930", "20260812_0930", "20260813_0930"):
+            _write_log_file(tmp_path, timestamp, [])
+
+        paths = ood.list_log_files(tmp_path, 2)
+
+        assert [path.name for path in paths] == [
+            "ood_research_log_20260812_0930.json",
+            "ood_research_log_20260813_0930.json",
+        ]
+
+
 class TestLoadLog:
-    def test_missing_file_returns_empty_markdown_placeholder(self, tmp_path):
+    def test_missing_directory_returns_empty_markdown_placeholder(self, tmp_path):
         # 対象: load_log
-        # パターン: ログファイルが存在しない場合、項目なしのMarkdownを返す
-        log_path = tmp_path / "ood_research_log.json"
-        assert ood.load_log(log_path) == "(報告済み項目はありません)"
+        # パターン: ログディレクトリが存在しない場合、項目なしのMarkdownを返す
+        assert ood.load_log(tmp_path / "absent") == "(報告済み項目はありません)"
 
     def test_empty_file_returns_empty_markdown_placeholder(self, tmp_path):
         # 対象: load_log
         # パターン: ログファイルが空白のみの場合、項目なしのMarkdownを返す
-        log_path = tmp_path / "ood_research_log.json"
-        log_path.write_text("   \n", encoding="utf-8")
-        assert ood.load_log(log_path) == "(報告済み項目はありません)"
+        (tmp_path / "ood_research_log_20260813_0930.json").write_text("   \n", encoding="utf-8")
+        assert ood.load_log(tmp_path) == "(報告済み項目はありません)"
 
-    def test_existing_json_entries_are_flattened_to_markdown(self, tmp_path):
+    def test_entries_from_multiple_run_files_are_merged(self, tmp_path):
         # 対象: load_log
-        # パターン: 実行記録からentriesだけを抽出し、調査回をまたいだMarkdownとして返す
-        log_path = tmp_path / "ood_research_log.json"
-        log_path.write_text(
-            '[{"datetime": "2026-08-13T09:30:00", "period": {}, '
-            '"entries": [{"category": "new_release", "status": "new", '
-            '"title": "v3.1.0", "item_date": "2026-08-01", "url": "https://example.com/v3.1.0", '
-            '"summary": "Adds new features.", "change_note": ""}]}, '
-            '{"datetime": "2026-08-14T09:30:00", "period": {}, '
-            '"entries": [{"category": "new_release", "status": "updated", '
-            '"title": "v3.1.0", "item_date": "2026-08-02", "url": "https://example.com/v3.1.0", '
-            '"summary": "Adds a fix.", "change_note": "Patch release added."}]}]\n',
-            encoding="utf-8",
+        # パターン: 調査回ごとのファイルを結合し、調査回をまたいだMarkdownとして返す
+        _write_log_file(tmp_path, "20260813_0930", [_log_entry_dict()])
+        _write_log_file(
+            tmp_path,
+            "20260814_0930",
+            [
+                _log_entry_dict(
+                    status="updated",
+                    item_date="2026-08-02",
+                    summary="Adds a fix.",
+                    change_note="Patch release added.",
+                )
+            ],
         )
-        rendered = ood.load_log(log_path)
+
+        rendered = ood.load_log(tmp_path)
+
         assert rendered.startswith("### new_release")
         assert rendered.count("- [") == 2
         assert "v3.1.0 (2026-08-01)" in rendered
@@ -441,28 +529,42 @@ class TestLoadLog:
         # 調査担当への入力も英語で統一する
         assert rendered.isascii()
 
+    def test_cap_limits_merged_runs_to_newest(self, tmp_path):
+        # 対象: load_log
+        # パターン: 件数キャップを指定すると、古い調査回の項目は入力に含まれない
+        _write_log_file(tmp_path, "20260813_0930", [_log_entry_dict(title="v3.0.0")])
+        _write_log_file(tmp_path, "20260814_0930", [_log_entry_dict(title="v3.1.0")])
+
+        rendered = ood.load_log(tmp_path, max_log_runs=1)
+
+        assert "v3.1.0" in rendered
+        assert "v3.0.0" not in rendered
+
 
 class TestAppendLog:
     def test_no_entries_does_not_create_file(self, tmp_path):
         # 対象: append_log
-        # パターン: entriesが空の場合、ファイルを作成しない
-        log_path = tmp_path / "ood_research_log.json"
-        ood.append_log(log_path, datetime(2026, 8, 13, 9, 30), [], "2026-07-14", "2026-08-13", 30)
-        assert not log_path.exists()
+        # パターン: entriesが空の場合、調査回のファイルを作成せずNoneを返す
+        path = ood.append_log(
+            tmp_path, datetime(2026, 8, 13, 9, 30), [], "2026-07-14", "2026-08-13", 30
+        )
+        assert path is None
+        assert list(tmp_path.glob("*.json")) == []
 
-    def test_creates_file_with_header_when_absent(self, tmp_path):
+    def test_creates_run_file_named_after_run_datetime(self, tmp_path):
         # 対象: append_log
-        # パターン: ログファイルが存在しない場合、JSON記録を新規作成し、対象期間を記録する
-        log_path = tmp_path / "ood_research_log.json"
-        ood.append_log(
-            log_path,
+        # パターン: 調査回ごとに実行日時を含む名前のファイルを作り、対象期間を記録する
+        log_dir = tmp_path / "logs"
+        path = ood.append_log(
+            log_dir,
             datetime(2026, 8, 13, 9, 30),
             [_make_entry()],
             "2026-07-14",
             "2026-08-13",
             30,
         )
-        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        assert path == log_dir / "ood_research_log_20260813_0930.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
         assert record["datetime"] == "2026-08-13T09:30:00"
         assert record["period"] == {
             "start": "2026-07-14",
@@ -471,41 +573,71 @@ class TestAppendLog:
         }
         assert record["entries"] == [_make_entry().model_dump()]
 
-    def test_appends_without_duplicating_header(self, tmp_path):
+    def test_separate_runs_are_written_to_separate_files(self, tmp_path):
         # 対象: append_log
-        # パターン: ログファイルが既存の場合、既存配列を保って記録を追記する
-        log_path = tmp_path / "ood_research_log.json"
-        log_path.write_text("[]\n", encoding="utf-8")
-        ood.append_log(
-            log_path,
-            datetime(2026, 8, 13, 10, 0),
-            [_make_entry(item_date="")],
+        # パターン: 別の調査回は既存ファイルへ追記せず、新しいファイルとして書き出す
+        first = ood.append_log(
+            tmp_path,
+            datetime(2026, 8, 13, 9, 30),
+            [_make_entry(title="v3.0.0")],
             "2026-07-14",
             "2026-08-13",
             30,
         )
-        records = json.loads(log_path.read_text(encoding="utf-8"))
-        assert len(records) == 1
-        assert records[0]["period"]["days"] == 30
-        assert records[0]["entries"][0]["item_date"] == ""
+        second = ood.append_log(
+            tmp_path,
+            datetime(2026, 8, 14, 10, 0),
+            [_make_entry(title="v3.1.0", item_date="")],
+            "2026-07-15",
+            "2026-08-14",
+            30,
+        )
 
-    def test_groups_entries_by_category_order(self, tmp_path):
+        assert first != second
+        assert json.loads(first.read_text(encoding="utf-8"))["entries"][0]["title"] == "v3.0.0"
+        second_record = json.loads(second.read_text(encoding="utf-8"))
+        assert second_record["entries"][0]["item_date"] == ""
+        assert second_record["period"]["days"] == 30
+
+    def test_same_minute_run_overwrites_previous_log_file(self, tmp_path):
         # 対象: append_log
-        # パターン: entriesの順序に関わらず、CATEGORIESの順で出力される
-        log_path = tmp_path / "ood_research_log.json"
+        # パターン: 同じ分に2回実行すると、同名の調査回ファイルが上書きされる
+        ood.append_log(
+            tmp_path,
+            datetime(2026, 8, 13, 9, 30),
+            [_make_entry(title="v3.0.0")],
+            "2026-07-14",
+            "2026-08-13",
+            30,
+        )
+        path = ood.append_log(
+            tmp_path,
+            datetime(2026, 8, 13, 9, 30),
+            [_make_entry(title="v3.1.0")],
+            "2026-07-14",
+            "2026-08-13",
+            30,
+        )
+
+        assert len(list(tmp_path.glob("ood_research_log_*.json"))) == 1
+        assert json.loads(path.read_text(encoding="utf-8"))["entries"][0]["title"] == "v3.1.0"
+
+    def test_keeps_entry_order_as_reported(self, tmp_path):
+        # 対象: append_log
+        # パターン: entriesは報告された順序のまま記録する
         entries = [
             _make_entry(category="community_event", title="GOOD Conference 2026"),
             _make_entry(category="new_release", title="v3.1.0"),
         ]
-        ood.append_log(
-            log_path,
+        path = ood.append_log(
+            tmp_path,
             datetime(2026, 8, 13, 9, 30),
             entries,
             "2026-07-14",
             "2026-08-13",
             30,
         )
-        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        record = json.loads(path.read_text(encoding="utf-8"))
         assert [entry["category"] for entry in record["entries"]] == [
             "community_event",
             "new_release",
@@ -514,17 +646,16 @@ class TestAppendLog:
     def test_update_status_includes_change_note(self, tmp_path):
         # 対象: append_log
         # パターン: status="updated"の項目がchange_note付きで記録される
-        log_path = tmp_path / "ood_research_log.json"
         entry = _make_entry(status="updated", change_note="深刻度がCriticalに変更")
-        ood.append_log(
-            log_path,
+        path = ood.append_log(
+            tmp_path,
             datetime(2026, 8, 13, 9, 30),
             [entry],
             "2026-07-14",
             "2026-08-13",
             30,
         )
-        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        record = json.loads(path.read_text(encoding="utf-8"))
         assert record["entries"][0]["status"] == "updated"
         assert record["entries"][0]["change_note"] == "深刻度がCriticalに変更"
 
@@ -723,6 +854,7 @@ class TestMainNoNewInformation:
         report = OODReport(entries=[])
         models = _stub_agents(monkeypatch, report, "記事本文")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
 
@@ -730,7 +862,7 @@ class TestMainNoNewInformation:
 
         assert "writer" not in models
         assert capsys.readouterr().out == ""
-        assert not (tmp_path / "ood_research_log.json").exists()
+        assert _written_log_files(tmp_path / "logs") == []
         assert not (tmp_path / "output").exists()
 
 
@@ -844,27 +976,48 @@ class TestParseArguments:
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--dry-run"])
         assert ood.build_parser().parse_args().dry_run is True
 
-    def test_resolve_log_path_uses_default_log_directory(self, monkeypatch, tmp_path):
-        # 対象: resolve_log_path
+    def test_max_log_runs_defaults_to_none(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: --max-log-runs未指定かつ環境変数なしの場合、None(=既定値扱い)になる
+        monkeypatch.delenv("MAX_LOG_RUNS", raising=False)
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        assert ood.build_parser().parse_args().max_log_runs is None
+
+    def test_max_log_runs_reads_environment_variable(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 環境変数 MAX_LOG_RUNS が既定値として使われる
+        monkeypatch.setenv("MAX_LOG_RUNS", "5")
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        assert ood.build_parser().parse_args().max_log_runs == 5
+
+    def test_cli_max_log_runs_overrides_environment_variable(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 環境変数より --max-log-runs の指定が優先される
+        monkeypatch.setenv("MAX_LOG_RUNS", "5")
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--max-log-runs", "2"])
+        assert ood.build_parser().parse_args().max_log_runs == 2
+
+    def test_resolve_log_dir_uses_default_log_directory(self, monkeypatch, tmp_path):
+        # 対象: resolve_log_dir
         # パターン: LOGDIR未設定時は .research_log ディレクトリを使い、存在しないなら作成する
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("LOGDIR", raising=False)
 
-        log_path = ood.resolve_log_path()
+        log_dir = ood.resolve_log_dir()
 
-        assert log_path == tmp_path / ".research_log" / "ood_research_log.json"
-        assert log_path.parent.is_dir()
+        assert log_dir == tmp_path / ".research_log"
+        assert log_dir.is_dir()
 
-    def test_resolve_log_path_uses_environment_directory(self, monkeypatch, tmp_path):
-        # 対象: resolve_log_path
+    def test_resolve_log_dir_uses_environment_directory(self, monkeypatch, tmp_path):
+        # 対象: resolve_log_dir
         # パターン: LOGDIRを指定したとき、そのディレクトリ配下にログを出力する
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("LOGDIR", "custom-logs")
 
-        log_path = ood.resolve_log_path()
+        log_dir = ood.resolve_log_dir()
 
-        assert log_path == tmp_path / "custom-logs" / "ood_research_log.json"
-        assert log_path.parent.is_dir()
+        assert log_dir == tmp_path / "custom-logs"
+        assert log_dir.is_dir()
 
 
 class TestDescribeApiError:
@@ -911,7 +1064,7 @@ class TestMain:
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_research_log.json"
+        log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "# 記事本文")
@@ -937,7 +1090,7 @@ class TestMain:
             "writer_categories": [ood.CATEGORIES[0]],
         }
         assert capsys.readouterr().out.strip() == "# 記事本文"
-        assert not log_path.exists()
+        assert _written_log_files(log_dir) == []
         assert not outdir.exists()
 
     def test_posts_article_to_configured_slack_webhook(self, tmp_path, monkeypatch):
@@ -1010,7 +1163,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_research_log.json"
+        log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
@@ -1030,7 +1183,11 @@ class TestMain:
         report_files = [p.name for p in outdir.glob("report_*.md")]
         assert len(report_files) == 1
         assert report_files[0].startswith(f"report_{today}_")
-        record = json.loads(log_path.read_text(encoding="utf-8"))[0]
+        log_files = _written_log_files(log_dir)
+        assert len(log_files) == 1
+        # ログファイル名も基準日ではなく実行日時を使う
+        assert log_files[0].name.startswith(f"ood_research_log_{today}_")
+        record = json.loads(log_files[0].read_text(encoding="utf-8"))
         assert record["datetime"].startswith(datetime.now().strftime("%Y-%m-%dT"))
         assert record["period"] == {
             "start": "2019-12-02",
@@ -1045,7 +1202,7 @@ class TestMain:
         # パターン: 基準日の書式が不正な場合、Agentを実行せず終了コード1とERRORログを返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
-        log_path = tmp_path / "logs" / "ood_research_log.json"
+        log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         monkeypatch.setenv("OUTDIR", str(outdir))
 
@@ -1067,7 +1224,7 @@ class TestMain:
         err = capsys.readouterr().err
         assert "YYYY-MM-DD" in err
         assert "'2026/07/31'" in err
-        assert not log_path.exists()
+        assert _written_log_files(log_dir) == []
         assert not outdir.exists()
 
     def test_progress_is_hidden_at_default_level(self, tmp_path, monkeypatch, capsys):
@@ -1112,8 +1269,8 @@ class TestMain:
         assert captured.out.strip() == "# 記事本文"
         assert "調査中" in captured.err
         assert "再構成中" in captured.err
-        assert "1 件を追記しました" in captured.err
-        assert "保存しました" in captured.err
+        assert "1 件を保存しました" in captured.err
+        assert "レポートを" in captured.err
 
     def test_invalid_log_level_warns_and_continues(self, tmp_path, monkeypatch, capsys):
         # 対象: main
@@ -1154,7 +1311,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_research_log.json"
+        log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
         monkeypatch.setattr(
@@ -1170,16 +1327,16 @@ class TestMain:
         err = capsys.readouterr().err
         assert "調査に失敗しました" in err
         assert "クレジットを追加" in err
-        assert not log_path.exists()
+        assert _written_log_files(log_dir) == []
         assert not outdir.exists()
 
     def test_writer_api_error_keeps_log_and_returns_error(self, tmp_path, monkeypatch, capsys):
         # 対象: main
-        # パターン: 再構成中のAPIエラー時、ログ追記は保持しレポートを書かず終了コード1を返す
+        # パターン: 再構成中のAPIエラー時、調査ログは保持しレポートを書かず終了コード1を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_research_log.json"
+        log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
@@ -1197,18 +1354,19 @@ class TestMain:
         assert exit_code == 1
         assert "記事の再構成に失敗しました" in capsys.readouterr().err
         # 調査結果は失われない
-        assert log_path.exists()
-        assert "v3.1.0" in log_path.read_text(encoding="utf-8")
+        log_files = _written_log_files(log_dir)
+        assert len(log_files) == 1
+        assert "v3.1.0" in log_files[0].read_text(encoding="utf-8")
         assert not outdir.exists()
 
     def test_success_writes_log_and_article(self, tmp_path, monkeypatch, capsys):
         # 対象: main
-        # パターン: 調査→再構成の2段実行を元にログ追記・レポート保存・標準出力を行い、
+        # パターン: 調査→再構成の2段実行を元に調査ログ保存・レポート保存・標準出力を行い、
         #           終了コード0を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_research_log.json"
+        log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 今回のニュースレター")
@@ -1217,7 +1375,7 @@ class TestMain:
         exit_code = ood.main()
 
         assert exit_code == 0
-        assert log_path.exists()
+        assert len(_written_log_files(log_dir)) == 1
         report_files = list(outdir.glob("report_*.md"))
         assert len(report_files) == 1
         # レポートファイル・標準出力は箇条書き報告文ではなく再構成後の記事になる
@@ -1285,7 +1443,7 @@ class TestMain:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        log_path = tmp_path / "logs" / "ood_research_log.json"
+        log_dir = tmp_path / "logs"
         fake_report = OODReport(entries=[])
         _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
@@ -1293,4 +1451,33 @@ class TestMain:
         exit_code = ood.main()
 
         assert exit_code == 0
-        assert not log_path.exists()
+        assert _written_log_files(log_dir) == []
+
+    def test_max_log_runs_limits_log_passed_to_researcher(self, tmp_path, monkeypatch):
+        # 対象: main
+        # パターン: --max-log-runs で指定した回数分だけ、過去の調査ログが調査担当への入力に入る
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_dir = tmp_path / "logs"
+        _write_log_file(log_dir, "20260813_0930", [_log_entry_dict(title="v3.0.0")])
+        _write_log_file(log_dir, "20260814_0930", [_log_entry_dict(title="v3.1.0")])
+        prompts = []
+
+        def _capture_run_sync(agent, input, max_turns):
+            prompts.append(input)
+            output = (
+                OODReport(entries=[])
+                if agent.kind == "researcher"
+                else OODArticle(article_markdown="記事")
+            )
+            return type("_FakeResult", (), {"final_output": output})
+
+        _stub_agents(monkeypatch, OODReport(entries=[]), "記事")
+        monkeypatch.setattr(ood.Runner, "run_sync", _capture_run_sync)
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--max-log-runs", "1"])
+
+        assert ood.main() == 0
+
+        assert "v3.1.0" in prompts[0]
+        assert "v3.0.0" not in prompts[0]

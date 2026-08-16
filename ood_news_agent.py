@@ -2,11 +2,11 @@
 """Open OnDemand の最新情報を収集し、日本語で報告するエージェント。
 
 OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を行う。実行するたびに、
-    作業ディレクトリの ood_research_log.json と今回の調査結果を突き合わせ、新規・更新のみを報告し、
-ログに追記する。処理は2段構成で、調査担当Agentの構造化出力(OODReport)を執筆担当Agentが
-ニュースレター記事(OODArticle)へ再構成する。記事本文は標準出力に加えて、
-$OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは調査担当Agentの
-構造化出力(entries)であり、再構成の影響を受けない。
+$LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.json)と今回の調査結果を
+突き合わせ、新規・更新のみを報告し、その回のログファイルを新たに書き出す。処理は2段構成で、
+調査担当Agentの構造化出力(OODReport)を執筆担当Agentがニュースレター記事(OODArticle)へ
+再構成する。記事本文は標準出力に加えて、$OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。
+ログに書き出すのは調査担当Agentの構造化出力(entries)であり、再構成の影響を受けない。
 
 使い方:
     export OPENAI_API_KEY=sk-...
@@ -20,6 +20,10 @@ $OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。ログに追記するのは
 
     # 調査対象期間(日数)を変える場合
     python ood_news_agent.py --window-days 30
+
+    # 調査担当Agentへ渡す過去の調査ログを直近5回分に制限する場合
+    python ood_news_agent.py --max-log-runs 5
+    MAX_LOG_RUNS=5 python ood_news_agent.py
 
     # 調査対象期間の基準日を指定する場合(既定は実行日)
     python ood_news_agent.py --base-date 2026-07-31
@@ -57,6 +61,14 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_DAYS = 30
+
+DEFAULT_MAX_LOG_RUNS = 10
+
+# 調査回ごとのログファイル名。実行日時を分単位で埋め込み、名前順が時系列順になるようにする。
+LOG_FILE_PREFIX = "ood_research_log_"
+LOG_FILE_SUFFIX = ".json"
+LOG_FILE_TIMESTAMP_FORMAT = "%Y%m%d_%H%M"
+LOG_FILE_GLOB = f"{LOG_FILE_PREFIX}*{LOG_FILE_SUFFIX}"
 
 SLACK_TIMEOUT_SECONDS = 10
 
@@ -158,8 +170,8 @@ def resolve_base_date(base_date: str | None, run_at: datetime) -> date:
         ) from e
 
 
-def resolve_log_path() -> Path:
-    """ログファイルの保存先パスを決定する。
+def resolve_log_dir() -> Path:
+    """調査ログの保存先ディレクトリを決定する。
 
     [実装理由] ログ保存先をCLI引数で変えられる仕組みは、運用が不安定になりやすく、同じ環境で
     実行される複数プロセスがログを混ぜてしまうリスクがある。環境変数 LOGDIR を使うことで、実行
@@ -167,15 +179,84 @@ def resolve_log_path() -> Path:
     している。
     ディレクトリが未作成でも自動で作るのは、ログの出力先が事前に存在しないことが多く、手動作成を
     必要とすると再実行のたびに失敗するためである。
+    単一ファイルのパスではなくディレクトリを返すのは、調査ログを調査回ごとのファイルに分けて
+    出力する設計に変えたためである。
 
     Returns:
-        ログファイルのパス。ディレクトリは自動作成する。
+        調査ログを格納するディレクトリ。ディレクトリは自動作成する。
     """
     log_dir = Path(os.environ.get("LOGDIR", ".research_log")).expanduser()
     if not log_dir.is_absolute():
         log_dir = Path.cwd() / log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir / "ood_research_log.json"
+    return log_dir
+
+
+def resolve_max_log_runs(max_log_runs: int | None) -> int:
+    """調査担当Agentへ渡す過去の調査回数の上限を決定する。
+
+    [実装理由] 調査回ごとにログを分割すると実行を重ねるほどファイルが増え、全件を連結すると
+    Agentへの入力が際限なく膨らんでプロンプト長の上限やコストを圧迫する。読み込む調査回数に上限を
+    設けることで、入力量を運用側で抑えられるようにしている。0以下を「上限なし」として扱うのは、
+    照合のために全履歴を渡したい運用を、別のフラグを増やさずに表現できるようにするためである。
+
+    Args:
+        max_log_runs: 読み込む調査回数の上限。Noneの場合は既定値を使う。
+
+    Returns:
+        読み込む調査回数の上限。0以下の場合は上限なしを意味する0を返す。
+    """
+    resolved = DEFAULT_MAX_LOG_RUNS if max_log_runs is None else max_log_runs
+    return max(resolved, 0)
+
+
+def log_file_path(log_dir: Path, run_at: datetime) -> Path:
+    """今回の調査結果を書き出すログファイルのパスを組み立てる。
+
+    [実装理由] ファイル名の規則(接頭辞とタイムスタンプ書式)を1か所に閉じ込め、書き出し側
+    (append_log)と読み込み側(load_log の走査対象)で規則が食い違わないようにしている。分単位の
+    タイムスタンプを使うのは、名前の辞書順が調査回の時系列順と一致し、新しい回を選ぶ処理で
+    ファイルの内容を読まずに済むためである。
+
+    Args:
+        log_dir: 調査ログを格納するディレクトリ。
+        run_at: 実行日時。ファイル名(YYYYMMDD_HHMM)に使う。
+
+    Returns:
+        今回の調査回に対応するログファイルのパス。
+    """
+    timestamp = run_at.strftime(LOG_FILE_TIMESTAMP_FORMAT)
+    return log_dir / f"{LOG_FILE_PREFIX}{timestamp}{LOG_FILE_SUFFIX}"
+
+
+def list_log_files(log_dir: Path, max_log_runs: int) -> list[Path]:
+    """読み込む対象の調査ログファイルを、古い順に並べて返す。
+
+    [実装理由] 上限を超える場合に新しい回を残すのは、既報告項目の照合で重要なのは直近の調査結果で
+    あり、古い回から捨てても照合の実用性を保てるためである。返す並びは古い順に戻しており、Agentへ
+    渡す入力が実際の時系列と同じ順序になるようにしている。ファイル名の辞書順で並べ替えるのは、
+    タイムスタンプが固定長のゼロ埋め書式であり、名前順が時系列順と一致するためである。
+
+    Args:
+        log_dir: 調査ログを格納するディレクトリ。
+        max_log_runs: 読み込む調査回数の上限。0以下の場合は上限を設けない。
+
+    Returns:
+        読み込む対象のログファイルのパス。古い順に並ぶ。存在しない場合は空リスト。
+    """
+    if not log_dir.is_dir():
+        return []
+    paths = sorted(path for path in log_dir.glob(LOG_FILE_GLOB) if path.is_file())
+    if max_log_runs > 0 and len(paths) > max_log_runs:
+        skipped = len(paths) - max_log_runs
+        logger.info(
+            "調査ログ %d 件のうち、新しい %d 件のみを読み込みます(古い %d 件は除外)",
+            len(paths),
+            max_log_runs,
+            skipped,
+        )
+        paths = paths[-max_log_runs:]
+    return paths
 
 
 def resolve_outdir() -> Path:
@@ -256,7 +337,7 @@ def build_researcher_agent(model: str) -> Agent:
     """Open OnDemand調査用の調査担当Agentを構築する。
 
     [実装理由] WebSearchToolによるWeb検索と、構造化出力(OODReport)を組み合わせたAgentを生成する。
-    ログ追記用データ(entries)だけを出力させるのは、レポート本文をLLMの自由記述に委ねず、
+    ログ保存用データ(entries)だけを出力させるのは、レポート本文をLLMの自由記述に委ねず、
     呼び出し側で決定的に組み立てられるようにするため。
 
     Args:
@@ -351,27 +432,48 @@ def compose_article(
     return article.article_markdown
 
 
-def load_log(log_path: Path) -> str:
-    """報告済み項目ログからentriesだけをフラットなMarkdownとして読み込む。
+def read_log_entries(log_path: Path) -> list[dict]:
+    """調査回1件分のログファイルからentriesを取り出す。
 
-    [実装理由] 調査担当Agentが照合に必要とするのは過去の項目情報だけであり、調査日時や対象期間を
-    入力に含めると項目比較のノイズになる。実行ごとの記録からentriesを連結し、カテゴリ別の
-    Markdownへ変換することで、ログの保存形式とAgent入力形式を分離する。ファイルが存在しない
-    場合は項目がないことを示すMarkdownを返す。
+    [実装理由] 1ファイルの読み込みとJSON解釈をここに閉じ込め、load_log 側は複数ファイルの結合だけを
+    担うようにしている。空ファイルを項目なしとして扱うのは、書き込み途中や手動編集で内容が空になった
+    ファイルが1つあるだけで調査全体を止めてしまうのを避けるためである。
 
     Args:
-        log_path: ood_research_log.json のパス。
+        log_path: 調査回1件分のログファイルのパス。
 
     Returns:
-        過去のentriesをフラットにしたMarkdown。存在しない、または空の場合は項目なしの文言。
+        ファイル内の `entries` のリスト。存在しない、または空の場合は空リスト。
     """
     if not log_path.exists():
-        return "(報告済み項目はありません)"
+        return []
     content = log_path.read_text(encoding="utf-8").strip()
     if not content:
-        return "(報告済み項目はありません)"
-    records = json.loads(content)
-    entries = [entry for record in records for entry in record.get("entries", [])]
+        return []
+    record = json.loads(content)
+    return list(record.get("entries", []))
+
+
+def load_log(log_dir: Path, max_log_runs: int = 0) -> str:
+    """調査回ごとのログファイルを結合し、entriesだけをフラットなMarkdownとして読み込む。
+
+    [実装理由] 調査担当Agentが照合に必要とするのは過去の項目情報だけであり、調査日時や対象期間を
+    入力に含めると項目比較のノイズになる。調査回ごとのファイルからentriesを連結し、カテゴリ別の
+    Markdownへ変換することで、ログの保存形式とAgent入力形式を分離する。ログを1ファイルに追記せず
+    調査回ごとに分けたうえで読み込み時に結合するのは、実行が並行しても互いのログを壊さず、古い回の
+    ログを個別に退避・削除できるようにするためである。読み込む回数に上限を設けるのは、実行を
+    重ねてもAgentへの入力が際限なく膨らまないようにするためである。
+
+    Args:
+        log_dir: 調査ログを格納するディレクトリ。
+        max_log_runs: 読み込む調査回数の上限。0以下の場合は上限を設けない。
+
+    Returns:
+        過去のentriesをフラットにしたMarkdown。項目が1件もない場合は項目なしの文言。
+    """
+    entries = [
+        entry for path in list_log_files(log_dir, max_log_runs) for entry in read_log_entries(path)
+    ]
     if not entries:
         return "(報告済み項目はありません)"
 
@@ -394,48 +496,49 @@ def load_log(log_path: Path) -> str:
 
 
 def append_log(
-    log_path: Path,
+    log_dir: Path,
     run_at: datetime,
     entries: list[ReportItem],
     window_start: str,
     base_date: str,
     window_days: int,
-) -> None:
-    """今回「新規」「更新」と判定された項目をJSONログへ追記する。
+) -> Path | None:
+    """今回「新規」「更新」と判定された項目を、この調査回のJSONログとして書き出す。
 
     [実装理由] LLMの出力(entries)をJSONへ変換してファイル書き込みを行う処理をPython側に置くことで、
-    保存内容と形式を確定的に保証する。entriesが空(変更なし)の場合は、ログを不必要に肥大化させない
-    よう何も書き込まない。実行日時と調査対象期間を同じ記録に保存することで、項目がいつどの期間の
-    調査で得られたかを機械的に追跡できるようにする。
+    保存内容と形式を確定的に保証する。entriesが空(変更なし)の場合は、意味のない空の調査回ファイルを
+    増やさないよう何も書き込まない。実行日時と調査対象期間を同じ記録に保存することで、項目がいつどの
+    期間の調査で得られたかを機械的に追跡できるようにする。
+    既存ファイルへ追記せず調査回ごとに新しいファイルを書き出すのは、読み込み・全体の再書き込みを
+    伴う追記をやめることで、ログが肥大化しても書き込み量が一定に保たれ、途中で失敗しても過去の回の
+    記録を壊さないためである。
 
     Args:
-        log_path: ood_research_log.json のパス。
-        run_at: 実行日時。追記セクションの見出し(YYYY-MM-DD HH:MM)に使う。
+        log_dir: 調査ログを格納するディレクトリ。存在しない場合は作成する。
+        run_at: 実行日時。ログファイル名(YYYYMMDD_HHMM)と記録の `datetime` に使う。
         entries: 今回「新規」または「更新」として報告した項目のリスト。
         window_start: 調査期間の開始日(YYYY-MM-DD)。
         base_date: 調査期間の終端日(YYYY-MM-DD)。
         window_days: 調査期間の日数。
 
     Returns:
-        None
+        書き出したログファイルのパス。entriesが空で何も書き出さなかった場合はNone。
     """
     if not entries:
-        return
-    records = []
-    if log_path.exists() and log_path.read_text(encoding="utf-8").strip():
-        records = json.loads(log_path.read_text(encoding="utf-8"))
-    records.append(
-        {
-            "datetime": run_at.isoformat(),
-            "period": {
-                "start": window_start,
-                "end": base_date,
-                "days": window_days,
-            },
-            "entries": [entry.model_dump() for entry in entries],
-        }
-    )
-    log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return None
+    record = {
+        "datetime": run_at.isoformat(),
+        "period": {
+            "start": window_start,
+            "end": base_date,
+            "days": window_days,
+        },
+        "entries": [entry.model_dump() for entry in entries],
+    }
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_file_path(log_dir, run_at)
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> Path:
@@ -445,8 +548,8 @@ def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> 
     実行ごとに一意なファイル名(分単位のタイムスタンプ入り)で保存し、
     過去のレポートを上書きせず蓄積できるようにする。保存するのは執筆担当Agentが再構成した記事本文で
     あり、調査担当Agentの箇条書き報告文は保存しない。両方を残すとどちらが正なのか読み手が判断できず、
-    ログ(ood_research_log.json)に構造化データが残っている以上、記事側は読み物として一本化する方が
-    用途が明確になるためである。
+    調査ログ(ood_research_log_*.json)に構造化データが残っている以上、記事側は読み物として
+    一本化する方が用途が明確になるためである。
 
     Args:
         outdir: 出力先ディレクトリ。存在しない場合は作成する。
@@ -546,6 +649,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"調査対象期間(日数) (既定: 環境変数 WINDOW_DAYS、未設定なら{DEFAULT_WINDOW_DAYS}日)",
     )
     parser.add_argument(
+        "--max-log-runs",
+        type=int,
+        default=os.environ.get("MAX_LOG_RUNS"),
+        help=(
+            "調査担当Agentへ渡す過去の調査ログの件数(調査回数)の上限。0以下で上限なし "
+            f"(既定: 環境変数 MAX_LOG_RUNS、未設定なら{DEFAULT_MAX_LOG_RUNS}回)"
+        ),
+    )
+    parser.add_argument(
         "--base-date",
         default=os.environ.get("BASE_DATE"),
         help=(
@@ -564,7 +676,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="APIによる調査・記事再構成は行い、ログ追記・レポート保存・Slack投稿は行わない",
+        help="APIによる調査・記事再構成は行い、調査ログ保存・レポート保存・Slack投稿は行わない",
     )
     parser.add_argument("--max-turns", type=int, default=40)
     return parser
@@ -705,7 +817,7 @@ def run_writer_agent(
     except APIError as e:
         logger.error(
             "記事の再構成に失敗しました。%s\n"
-            "(調査結果は %s に追記済みです。再実行すると、追記済みの項目は"
+            "(調査結果は %s に保存済みです。再実行すると、保存済みの項目は"
             "「変更なし」と判定され再報告されない点に注意してください)",
             describe_api_error(e),
             log_path,
@@ -729,7 +841,7 @@ def finalize_report(
 
     if args.dry_run:
         print(article_markdown)
-        logger.info("ドライランのため、ログ追記・レポート保存・Slack投稿を行いません")
+        logger.info("ドライランのため、調査ログ保存・レポート保存・Slack投稿を行いません")
         return article_markdown, None
 
     path = persist_report(
@@ -741,7 +853,7 @@ def finalize_report(
         return None
 
     print(article_markdown)
-    logger.info("ログファイル %s に %d 件を追記しました", log_path, len(report.entries))
+    logger.info("ログファイル %s に %d 件を保存しました", log_path, len(report.entries))
     logger.info("レポートを %s に保存しました", path)
     return article_markdown, path
 
@@ -765,7 +877,7 @@ def main() -> int:
         )
         return 1
 
-    log_path = resolve_log_path()
+    log_dir = resolve_log_dir()
     run_at = datetime.now()
     try:
         base_date = resolve_base_date(args.base_date, run_at)
@@ -775,7 +887,7 @@ def main() -> int:
 
     window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
     window_start = base_date - timedelta(days=window_days)
-    existing_log = load_log(log_path)
+    existing_log = load_log(log_dir, resolve_max_log_runs(args.max_log_runs))
     report = run_researcher_agent(
         args,
         existing_log,
@@ -786,9 +898,10 @@ def main() -> int:
     if report is None:
         return 1
 
+    log_path = None
     if not args.dry_run:
-        append_log(
-            log_path,
+        log_path = append_log(
+            log_dir,
             run_at,
             report.entries,
             window_start.isoformat(),
@@ -804,7 +917,7 @@ def main() -> int:
     article_markdown = run_writer_agent(
         args,
         report,
-        log_path,
+        log_path or log_dir,
         writer_model,
         base_date,
         window_start,
@@ -816,7 +929,7 @@ def main() -> int:
     result = finalize_report(
         args,
         report,
-        log_path,
+        log_path or log_dir,
         run_at,
         article_markdown,
     )

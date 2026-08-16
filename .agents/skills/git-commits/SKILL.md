@@ -43,7 +43,7 @@ EOF
 ## 注意
 
 - ユーザーから明示的に依頼されない限り、コミットは作成しない。
-- 実行時に生成される `ood_research_log.json` と `output/` は `.gitignore` 対象で
+- 実行時に生成される `.research_log/`（調査ログ）と `output/` は `.gitignore` 対象で
   あり、コミットに含めない。
 
 ## 例
