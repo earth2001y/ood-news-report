@@ -35,6 +35,11 @@ $LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.
 
     # APIで調査・記事執筆を行い、結果を標準出力にだけ表示する場合
     python -m app --dry-run
+
+    # 調査または執筆の一方だけを行う場合
+    python -m app --only-researcher
+    python -m app --only-writer
+    python -m app --only-writer --research-result ./logs/research.json
 """
 
 from __future__ import annotations
@@ -267,6 +272,34 @@ def read_log_entries(log_path: Path) -> list[dict]:
     return list(record.get("entries", []))
 
 
+def load_writer_report(
+    log_dir: Path, research_result: Path | None
+) -> tuple[OODReport, Path] | None:
+    """指定された、または最新の調査ログを執筆担当Agent用の調査結果として読み込む。
+
+    [実装理由] 調査と執筆を別プロセスで実行するときは、プロセス間で受け渡せる構造化データが
+    調査回ごとのログだけになる。パスを指定できるようにすることで任意の調査回を記事化でき、
+    未指定時は最新の1件に限定することで、従来どおり直前の調査だけを再度執筆できるようにしている。
+
+    Args:
+        log_dir: 調査ログを格納するディレクトリ。
+        research_result: 使用する調査結果JSONのパス。Noneの場合は最新ログを使う。
+
+    Returns:
+        ログから復元した調査結果と、そのログファイルのパス。対象ファイルがない場合はNone。
+    """
+    if research_result is None:
+        paths = list_log_files(log_dir, 1)
+        if not paths:
+            return None
+        path = paths[-1]
+    else:
+        path = research_result.expanduser()
+    if not path.is_file():
+        return None
+    return OODReport(entries=read_log_entries(path)), path
+
+
 def load_log(log_dir: Path, max_log_runs: int = 0) -> str:
     """調査回ごとのログファイルを結合し、entriesだけをフラットなMarkdownとして読み込む。
 
@@ -481,8 +514,42 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="APIによる調査・記事執筆は行い、調査ログ保存・レポート保存・Slack投稿は行わない",
     )
+    execution_group = parser.add_mutually_exclusive_group()
+    execution_group.add_argument(
+        "--only-researcher",
+        action="store_true",
+        help="調査と調査ログの保存だけを行い、記事執筆は行わない",
+    )
+    execution_group.add_argument(
+        "--only-writer",
+        action="store_true",
+        help="調査結果JSONを使った記事執筆だけを行い、調査は行わない",
+    )
+    parser.add_argument(
+        "--research-result",
+        type=Path,
+        metavar="PATH",
+        help="記事執筆に使う調査結果JSON (--only-writer指定時のみ。未指定なら最新ログ)",
+    )
     parser.add_argument("--max-turns", type=int, default=40)
     return parser
+
+
+def parse_arguments() -> argparse.Namespace:
+    """CLI引数を解析し、実行モードに依存する組み合わせを検証する。
+
+    [実装理由] argparseの排他グループでは「別のオプションが指定された場合だけ使用可能」という
+    依存関係を表現できないため、パース直後に一元的に検証する。エラーにはparser.errorを使い、
+    通常の引数エラーと同じ使用方法・終了コードを表示する。
+
+    Returns:
+        組み合わせの検証を終えたCLI引数。
+    """
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.research_result is not None and not args.only_writer:
+        parser.error("--research-result can only be used with --only-writer")
+    return args
 
 
 API_ERROR_HINTS = {
@@ -573,7 +640,9 @@ def persist_report(article_markdown: str, outdir: Path, run_at: datetime) -> Pat
     return path
 
 
-def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: int) -> str | None:
+def run_writer_agent(
+    report: OODReport, log_path: Path | None, model: str, max_turns: int
+) -> str | None:
     """調査結果を基に執筆担当Agentで記事を執筆する。
 
     [実装理由] 執筆担当Agentの作成・実行と、ファイル保存・Slack投稿を分離することで、
@@ -581,7 +650,7 @@ def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: i
 
     Args:
         report: 調査担当Agentの構造化出力。
-        log_path: 調査結果を保存したログファイルのパス。
+        log_path: 調査結果を保存したログファイルのパス。未保存の場合はNone。
         model: 執筆担当Agentに使用するモデル名。
         max_turns: Agent実行の最大ターン数。
     """
@@ -589,10 +658,13 @@ def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: i
     try:
         article_markdown = write_article(model, report, max_turns)
     except APIError as e:
+        if log_path is None:
+            logger.error("Article writing failed. %s", describe_api_error(e))
+            return None
         logger.error(
             "Article writing failed. %s\n"
-            "(The research results have already been saved to %s. On rerun, saved items may be "
-            "classified as unchanged and omitted.)",
+            "(The research results are available at %s. Retry article writing with "
+            "--only-writer.)",
             describe_api_error(e),
             log_path,
         )
@@ -601,21 +673,25 @@ def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: i
 
 
 def finalize_report(
-    args: argparse.Namespace,
-    report: OODReport,
-    log_path: Path,
-    run_at: datetime,
-    article_markdown: str,
+    args: argparse.Namespace, run_at: datetime, article_markdown: str
 ) -> tuple[str, Path | None] | None:
     """記事本文を保存し、設定があればSlackへ投稿する。
 
     [実装理由] Agent実行を終えた記事本文だけを受け取ることで、結果の生成と永続化の責務を
     分離し、ドライラン時に副作用を確実に抑止できるようにしている。
+
+    Args:
+        args: パース済みのCLI引数。ドライランかどうかの判定に使う。
+        run_at: 実行日時。レポートファイル名に使う。
+        article_markdown: 保存・表示する記事本文。
+
+    Returns:
+        記事本文と保存先の組。ドライラン時の保存先はNone。保存またはSlack投稿の失敗時はNone。
     """
 
     if args.dry_run:
         print(article_markdown)
-        logger.info("Dry run: skipping research log, report, and Slack delivery")
+        logger.info("Dry run: skipping report storage and Slack delivery")
         return article_markdown, None
 
     path = persist_report(article_markdown, resolve_outdir(), run_at)
@@ -623,9 +699,39 @@ def finalize_report(
         return None
 
     print(article_markdown)
-    logger.info("Saved %d entries to research log %s", len(report.entries), log_path)
     logger.info("Saved report to %s", path)
     return article_markdown, path
+
+
+def run_writer_flow(
+    args: argparse.Namespace, report: OODReport, log_path: Path | None, run_at: datetime
+) -> int:
+    """調査結果があれば記事を執筆し、指定された出力先へ引き渡す。
+
+    [実装理由] 通常実行と執筆のみの実行で同じ執筆・保存フローを共有し、実行モードによって
+    記事生成後の挙動が食い違わないようにする。空の調査結果は記事にせず正常終了させることで、
+    通常実行の既存の挙動も維持している。
+
+    Args:
+        args: パース済みのCLI引数。
+        report: 記事の入力となる調査結果。
+        log_path: 調査結果を読み込んだ、または保存したログのパス。未保存の場合はNone。
+        run_at: 実行日時。レポートファイル名に使う。
+
+    Returns:
+        プロセス終了コード。正常終了は0、API呼び出しまたは出力の失敗時は1。
+    """
+    if not report.entries:
+        logger.info("No new information found; skipping newsletter article generation")
+        return 0
+
+    writer_model = args.writer_model or args.model
+    article_markdown = run_writer_agent(report, log_path, writer_model, args.max_turns)
+    if article_markdown is None:
+        return 1
+
+    result = finalize_report(args, run_at, article_markdown)
+    return 1 if result is None else 0
 
 
 def main() -> int:
@@ -635,9 +741,10 @@ def main() -> int:
     これにより、CLI の入口としての責務が明確になり、各処理の単体テストや保守がしやすくなる。
 
     Returns:
-        プロセス終了コード。正常終了は0、APIキー未設定時・基準日の書式不正時・API呼び出し失敗時は1。
+        プロセス終了コード。正常終了は0、APIキー未設定時・基準日の書式不正時、調査ログ未存在時、
+        API呼び出し失敗時は1。
     """
-    args = build_parser().parse_args()
+    args = parse_arguments()
     setup_logging(args.log_level)
 
     if not os.environ.get("OPENAI_API_KEY"):
@@ -648,6 +755,21 @@ def main() -> int:
 
     log_dir = resolve_log_dir()
     run_at = datetime.now()
+
+    if args.only_writer:
+        selected = load_writer_report(log_dir, args.research_result)
+        if selected is None and args.research_result is not None:
+            logger.error("Research result JSON not found: %s", args.research_result)
+            return 1
+        if selected is None:
+            logger.error(
+                "No research log found in %s. Run the researcher before using --only-writer.",
+                log_dir,
+            )
+            return 1
+        report, log_path = selected
+        return run_writer_flow(args, report, log_path, run_at)
+
     try:
         base_date = resolve_base_date(args.base_date, run_at)
     except ValueError as e:
@@ -669,20 +791,15 @@ def main() -> int:
     log_path = None
     if not args.dry_run:
         log_path = append_log(log_dir, run_at, report.entries, period)
+        if log_path is not None:
+            logger.info("Saved %d entries to research log %s", len(report.entries), log_path)
 
-    if not report.entries:
-        logger.info("No new information found; skipping newsletter article generation")
+    if args.only_researcher:
+        if args.dry_run:
+            logger.info("Dry run: skipping research log storage")
         return 0
 
-    writer_model = args.writer_model or args.model
-    article_markdown = run_writer_agent(report, log_path or log_dir, writer_model, args.max_turns)
-    if article_markdown is None:
-        return 1
-
-    result = finalize_report(args, report, log_path or log_dir, run_at, article_markdown)
-    if result is None:
-        return 1
-    return 0
+    return run_writer_flow(args, report, log_path, run_at)
 
 
 if __name__ == "__main__":

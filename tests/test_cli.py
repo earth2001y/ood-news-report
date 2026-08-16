@@ -6,6 +6,7 @@ import json
 import logging
 import sys
 from datetime import date, datetime
+from pathlib import Path
 
 import httpx
 import pytest
@@ -490,6 +491,130 @@ class TestMainNoNewInformation:
         assert not (tmp_path / "output").exists()
 
 
+class TestExecutionModes:
+    def test_only_researcher_saves_log_without_writing_article(self, monkeypatch, tmp_path, capsys):
+        # 対象: main
+        # パターン: --only-researcher指定時、調査ログだけを保存し執筆と記事出力を行わない
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        report = OODReport(entries=[_make_entry()])
+        models = _stub_agents(monkeypatch, report, "記事本文")
+        monkeypatch.setattr(sys, "argv", ["app", "--only-researcher"])
+
+        assert ood.main() == 0
+
+        assert models == {"researcher": "gpt-5.4"}
+        assert len(_written_log_files(tmp_path / "logs")) == 1
+        assert capsys.readouterr().out == ""
+        assert not (tmp_path / "output").exists()
+
+    def test_only_writer_uses_latest_log_without_running_researcher(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        # 対象: main
+        # パターン: --only-writer指定時、最新の調査ログだけを使って執筆し、調査は行わない
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_dir = tmp_path / "logs"
+        _write_log_file(log_dir, "20260813_0930", [_log_entry_dict(title="古い調査")])
+        latest_path = _write_log_file(
+            log_dir, "20260814_0930", [_log_entry_dict(title="最新の調査")]
+        )
+        captured = {}
+
+        def _must_not_research(*args, **kwargs):
+            raise AssertionError("--only-writer指定時に調査が実行された")
+
+        def _write_article(model, report, max_turns):
+            captured["model"] = model
+            captured["titles"] = [entry.title for entry in report.entries]
+            return "# 最新ログの記事"
+
+        monkeypatch.setattr(ood, "run_researcher", _must_not_research)
+        monkeypatch.setattr(ood, "write_article", _write_article)
+        monkeypatch.setattr(sys, "argv", ["app", "--only-writer", "--writer-model", "gpt-writer"])
+
+        assert ood.main() == 0
+
+        assert captured == {"model": "gpt-writer", "titles": ["最新の調査"]}
+        assert _written_log_files(log_dir) == [
+            log_dir / "ood_research_log_20260813_0930.json",
+            latest_path,
+        ]
+        assert capsys.readouterr().out.strip() == "# 最新ログの記事"
+        report_files = list((tmp_path / "output").glob("report_*.md"))
+        assert len(report_files) == 1
+
+    def test_only_writer_uses_specified_research_result(self, monkeypatch, tmp_path):
+        # 対象: main
+        # パターン: --research-result指定時、最新ログではなく指定したJSONを使って執筆する
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
+        log_dir = tmp_path / "logs"
+        selected_path = _write_log_file(
+            tmp_path / "selected", "20260812_0930", [_log_entry_dict(title="指定した調査")]
+        )
+        _write_log_file(log_dir, "20260814_0930", [_log_entry_dict(title="最新の調査")])
+        captured_titles = []
+
+        def _must_not_research(*args, **kwargs):
+            raise AssertionError("--only-writer指定時に調査が実行された")
+
+        def _write_article(model, report, max_turns):
+            captured_titles.extend(entry.title for entry in report.entries)
+            return "# 指定ログの記事"
+
+        monkeypatch.setattr(ood, "run_researcher", _must_not_research)
+        monkeypatch.setattr(ood, "write_article", _write_article)
+        monkeypatch.setattr(
+            sys, "argv", ["app", "--only-writer", "--research-result", str(selected_path)]
+        )
+
+        assert ood.main() == 0
+        assert captured_titles == ["指定した調査"]
+
+    def test_only_writer_does_not_fall_back_when_specified_result_is_missing(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        # 対象: main
+        # パターン: 指定したJSONがなければ最新ログへフォールバックせずエラー終了する
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+        _write_log_file(tmp_path / "logs", "20260814_0930", [_log_entry_dict(title="最新の調査")])
+        missing_path = tmp_path / "missing.json"
+
+        def _must_not_run(*args, **kwargs):
+            raise AssertionError("指定した調査結果がないのにAgentが実行された")
+
+        monkeypatch.setattr(ood, "run_researcher", _must_not_run)
+        monkeypatch.setattr(ood, "write_article", _must_not_run)
+        monkeypatch.setattr(
+            sys, "argv", ["app", "--only-writer", "--research-result", str(missing_path)]
+        )
+
+        assert ood.main() == 1
+        assert str(missing_path) in capsys.readouterr().err
+
+    def test_only_writer_without_log_returns_error(self, monkeypatch, tmp_path, capsys):
+        # 対象: main
+        # パターン: --only-writer指定時に調査ログがなければAgentを実行せずエラー終了する
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
+
+        def _must_not_run(*args, **kwargs):
+            raise AssertionError("調査ログがないのにAgentが実行された")
+
+        monkeypatch.setattr(ood, "run_researcher", _must_not_run)
+        monkeypatch.setattr(ood, "write_article", _must_not_run)
+        monkeypatch.setattr(sys, "argv", ["app", "--only-writer"])
+
+        assert ood.main() == 1
+        assert "No research log found" in capsys.readouterr().err
+
+
 class TestParseArguments:
     def test_parses_cli_values(self, monkeypatch):
         # 対象: build_parser
@@ -597,6 +722,52 @@ class TestParseArguments:
         # パターン: --dry-runを指定するとドライランが有効になる
         monkeypatch.setattr(sys, "argv", ["app", "--dry-run"])
         assert ood.build_parser().parse_args().dry_run is True
+
+    @pytest.mark.parametrize(
+        ("option", "attribute"),
+        [("--only-researcher", "only_researcher"), ("--only-writer", "only_writer")],
+    )
+    def test_execution_mode_option_is_enabled(self, monkeypatch, option, attribute):
+        # 対象: build_parser
+        # パターン: 単独実行オプションを指定すると対応する実行モードが有効になる
+        monkeypatch.setattr(sys, "argv", ["app", option])
+        args = ood.build_parser().parse_args()
+        assert getattr(args, attribute) is True
+
+    def test_execution_mode_options_default_to_false(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: 単独実行オプションが無指定なら、従来どおり調査と執筆の両方が有効になる
+        monkeypatch.setattr(sys, "argv", ["app"])
+        args = ood.build_parser().parse_args()
+        assert args.only_researcher is False
+        assert args.only_writer is False
+
+    def test_execution_mode_options_are_mutually_exclusive(self, monkeypatch):
+        # 対象: build_parser
+        # パターン: --only-researcherと--only-writerを同時に指定するとパースエラーになる
+        monkeypatch.setattr(sys, "argv", ["app", "--only-researcher", "--only-writer"])
+        with pytest.raises(SystemExit):
+            ood.build_parser().parse_args()
+
+    def test_research_result_is_available_with_only_writer(self, monkeypatch):
+        # 対象: parse_arguments
+        # パターン: --only-writerとの併用時、指定した調査結果JSONのパスを受け付ける
+        monkeypatch.setattr(
+            sys, "argv", ["app", "--only-writer", "--research-result", "logs/research.json"]
+        )
+        args = ood.parse_arguments()
+        assert args.research_result == Path("logs/research.json")
+
+    @pytest.mark.parametrize("execution_option", [None, "--only-researcher"])
+    def test_research_result_requires_only_writer(self, monkeypatch, execution_option):
+        # 対象: parse_arguments
+        # パターン: --only-writerなしで--research-resultを指定するとパースエラーになる
+        arguments = ["app", "--research-result", "logs/research.json"]
+        if execution_option is not None:
+            arguments.insert(1, execution_option)
+        monkeypatch.setattr(sys, "argv", arguments)
+        with pytest.raises(SystemExit):
+            ood.parse_arguments()
 
     def test_max_log_runs_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
