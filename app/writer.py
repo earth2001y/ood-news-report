@@ -1,4 +1,4 @@
-"""構造化された Open OnDemand の調査結果を日本語の記事へ再構成する。"""
+"""構造化された Open OnDemand の調査結果から日本語の記事を執筆する。"""
 
 from agents import Agent, Runner, WebSearchTool
 from pydantic import BaseModel, Field
@@ -19,12 +19,12 @@ CATEGORY_DESCRIPTIONS = {
 
 class OODArticle(BaseModel):
     article_markdown: str = Field(
-        description="調査結果を再構成した、日本語のニュースレター記事本文(Markdown)"
+        description="調査結果を基に執筆した、日本語のニュースレター記事本文(Markdown)"
     )
 
 
 def build_writer_agent(model: str, categories: list[str] | None = None) -> Agent:
-    """調査結果をニュースレター記事へ再構成するAgentを構築する。
+    """調査結果を基にニュースレター記事を執筆するAgentを構築する。
 
     [実装理由] 調査と執筆を別のAgentにすることで、事実収集と文章構成の判断を分離する。
     英語の調査結果から日本語記事への翻訳もこのAgentの責務とし、カテゴリの識別子と説明だけを
@@ -73,8 +73,8 @@ def build_writer_prompt(report: OODReport) -> str:
     )
 
 
-def compose_article(model: str, report: OODReport, max_turns: int) -> str:
-    """調査結果を執筆担当Agentで日本語の記事へ再構成する。
+def write_article(model: str, report: OODReport, max_turns: int) -> str:
+    """調査結果を基に執筆担当Agentで日本語の記事を執筆する。
 
     [実装理由] Agentの構築、入力生成、SDKの実行を執筆担当モジュールで完結させることで、
     CLIから記事生成の実装詳細を切り離す。実際に項目があるカテゴリだけを指示へ渡し、空の
@@ -86,7 +86,7 @@ def compose_article(model: str, report: OODReport, max_turns: int) -> str:
         max_turns: Agent実行の最大ターン数。
 
     Returns:
-        再構成された日本語の記事本文(Markdown)。
+        執筆された日本語の記事本文(Markdown)。
     """
     categories = [
         category

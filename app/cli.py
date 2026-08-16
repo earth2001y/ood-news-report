@@ -4,9 +4,9 @@
 OpenAI Agents SDK (openai-agents) を使用し、WebSearchTool でWeb検索を行う。実行するたびに、
 $LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.json)と今回の調査結果を
 突き合わせ、新規・更新のみを報告し、その回のログファイルを新たに書き出す。処理は2段構成で、
-調査担当Agentの構造化出力(OODReport)を執筆担当Agentがニュースレター記事(OODArticle)へ
-再構成する。記事本文は標準出力に加えて、$OUTDIR/report_YYYYMMDD_HHMM.md にも保存する。
-ログに書き出すのは調査担当Agentの構造化出力(entries)であり、再構成の影響を受けない。
+調査担当Agentの構造化出力(OODReport)を基に、執筆担当Agentがニュースレター記事
+(OODArticle)を執筆する。記事本文は標準出力に加えて、$OUTDIR/report_YYYYMMDD_HHMM.md にも
+保存する。ログに書き出すのは調査担当Agentの構造化出力(entries)であり、執筆の影響を受けない。
 
 使い方:
     export OPENAI_API_KEY=sk-...
@@ -15,7 +15,7 @@ $LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.
     # ログ保存先やモデル、レポート出力先を変える場合
     OUTDIR=./output LOGDIR=./logs python -m app --model gpt-5.4
 
-    # 記事再構成だけ別のモデルで行う場合
+    # 記事執筆だけ別のモデルで行う場合
     python -m app --writer-model gpt-5.4
 
     # 調査対象期間(日数)を変える場合
@@ -33,7 +33,7 @@ $LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.
     python -m app --log-level INFO
     OOD_LOG_LEVEL=INFO python -m app
 
-    # APIで調査・記事再構成を行い、結果を標準出力にだけ表示する場合
+    # APIで調査・記事執筆を行い、結果を標準出力にだけ表示する場合
     python -m app --dry-run
 """
 
@@ -54,7 +54,7 @@ from openai import APIError
 
 from .news_models import CATEGORIES, OODReport, ReportItem
 from .researcher import ResearchPeriod, run_researcher
-from .writer import compose_article
+from .writer import write_article
 
 load_dotenv()
 
@@ -355,7 +355,7 @@ def write_report_file(outdir: Path, run_at: datetime, article_markdown: str) -> 
 
     [実装理由] 標準出力だけでは実行環境によっては後から結果を追えないため、
     実行ごとに一意なファイル名(分単位のタイムスタンプ入り)で保存し、
-    過去のレポートを上書きせず蓄積できるようにする。保存するのは執筆担当Agentが再構成した記事本文で
+    過去のレポートを上書きせず蓄積できるようにする。保存するのは執筆担当Agentが執筆した記事本文で
     あり、調査担当Agentの箇条書き報告文は保存しない。両方を残すとどちらが正なのか読み手が判断できず、
     調査ログ(ood_research_log_*.json)に構造化データが残っている以上、記事側は読み物として
     一本化する方が用途が明確になるためである。
@@ -444,7 +444,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--writer-model",
         default=os.environ.get("OOD_WRITER_MODEL"),
         help=(
-            "記事再構成に使うWebSearchTool対応モデル "
+            "記事執筆に使うWebSearchTool対応モデル "
             "(既定: 環境変数 OOD_WRITER_MODEL、未設定なら --model と同じ)"
         ),
     )
@@ -482,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="APIによる調査・記事再構成は行い、調査ログ保存・レポート保存・Slack投稿は行わない",
+        help="APIによる調査・記事執筆は行い、調査ログ保存・レポート保存・Slack投稿は行わない",
     )
     parser.add_argument("--max-turns", type=int, default=40)
     return parser
@@ -593,7 +593,7 @@ def persist_report(article_markdown: str, outdir: Path, run_at: datetime) -> Pat
 
 
 def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: int) -> str | None:
-    """調査結果を執筆担当Agentで記事へ再構成する。
+    """調査結果を基に執筆担当Agentで記事を執筆する。
 
     [実装理由] 執筆担当Agentの作成・実行と、ファイル保存・Slack投稿を分離することで、
     Agent実行の失敗と副作用を伴う永続化処理を独立して扱えるようにしている。
@@ -604,12 +604,12 @@ def run_writer_agent(report: OODReport, log_path: Path, model: str, max_turns: i
         model: 執筆担当Agentに使用するモデル名。
         max_turns: Agent実行の最大ターン数。
     """
-    logger.info("Composing a newsletter article from the research results...")
+    logger.info("Writing a newsletter article from the research results...")
     try:
-        article_markdown = compose_article(model=model, report=report, max_turns=max_turns)
+        article_markdown = write_article(model=model, report=report, max_turns=max_turns)
     except APIError as e:
         logger.error(
-            "Article composition failed. %s\n"
+            "Article writing failed. %s\n"
             "(The research results have already been saved to %s. On rerun, saved items may be "
             "classified as unchanged and omitted.)",
             describe_api_error(e),
@@ -648,7 +648,7 @@ def finalize_report(
 
 
 def main() -> int:
-    """CLIエントリポイント。調査・記事再構成を実行し、必要に応じて結果を永続化する。
+    """CLIエントリポイント。調査・記事執筆を実行し、必要に応じて結果を永続化する。
 
     [実装理由] 実行順序の制御だけをこの関数に残し、各処理の詳細はヘルパー関数に分離している。
     これにより、CLI の入口としての責務が明確になり、各処理の単体テストや保守がしやすくなる。

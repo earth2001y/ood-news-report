@@ -54,12 +54,12 @@ def _stub_agents(monkeypatch, report, article_markdown):
         models["researcher"] = kwargs["model"]
         return report
 
-    def _compose_article(**kwargs):
+    def _write_article(**kwargs):
         models["writer"] = kwargs["model"]
         return article_markdown
 
     monkeypatch.setattr(ood, "run_researcher", _run_researcher)
-    monkeypatch.setattr(ood, "compose_article", _compose_article)
+    monkeypatch.setattr(ood, "write_article", _write_article)
     return models
 
 
@@ -676,7 +676,7 @@ class TestMain:
         self, tmp_path, monkeypatch, capsys
     ):
         # 対象: main
-        # パターン: ドライランでも調査・記事再構成を実行し、記事は標準出力だけに出す
+        # パターン: ドライランでも調査・記事執筆を実行し、記事は標準出力だけに出す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
@@ -843,7 +843,7 @@ class TestMain:
         captured = capsys.readouterr()
         assert captured.out.strip() == "# 記事本文"
         assert "Researching the latest Open OnDemand news" in captured.err
-        assert "Composing a newsletter article" in captured.err
+        assert "Writing a newsletter article" in captured.err
         assert "Saved 1 entries" in captured.err
         assert "Saved report to" in captured.err
 
@@ -894,7 +894,7 @@ class TestMain:
 
     def test_writer_api_error_keeps_log_and_returns_error(self, tmp_path, monkeypatch, capsys):
         # 対象: main
-        # パターン: 再構成中のAPIエラー時、調査ログは保持しレポートを書かず終了コード1を返す
+        # パターン: 記事執筆中のAPIエラー時、調査ログは保持しレポートを書かず終了コード1を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
@@ -902,13 +902,13 @@ class TestMain:
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         monkeypatch.setattr(ood, "run_researcher", lambda **kwargs: fake_report)
-        monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: _raise(_make_api_error()))
+        monkeypatch.setattr(ood, "write_article", lambda *a, **kw: _raise(_make_api_error()))
         monkeypatch.setattr(sys, "argv", ["app"])
 
         exit_code = ood.main()
 
         assert exit_code == 1
-        assert "Article composition failed" in capsys.readouterr().err
+        assert "Article writing failed" in capsys.readouterr().err
         # 調査結果は失われない
         log_files = _written_log_files(log_dir)
         assert len(log_files) == 1
@@ -917,7 +917,7 @@ class TestMain:
 
     def test_success_writes_log_and_article(self, tmp_path, monkeypatch, capsys):
         # 対象: main
-        # パターン: 調査→再構成の2段実行を元に調査ログ保存・レポート保存・標準出力を行い、
+        # パターン: 調査→記事執筆の2段実行を元に調査ログ保存・レポート保存・標準出力を行い、
         #           終了コード0を返す
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
@@ -934,7 +934,7 @@ class TestMain:
         assert len(_written_log_files(log_dir)) == 1
         report_files = list(outdir.glob("report_*.md"))
         assert len(report_files) == 1
-        # レポートファイル・標準出力は箇条書き報告文ではなく再構成後の記事になる
+        # レポートファイル・標準出力は箇条書き報告文ではなく執筆後の記事になる
         assert report_files[0].read_text(encoding="utf-8") == "# 今回のニュースレター"
         out = capsys.readouterr().out
         assert "# 今回のニュースレター" in out

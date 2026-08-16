@@ -4,8 +4,8 @@
 標準出力に表示するのと同時に、`$OUTDIR/report_YYYYMMDD_HHMM.md` としても
 保存します。書き込み処理は `write_report_file` 関数が担います。
 
-保存されるのは、調査担当Agentの構造化出力(`OODReport`)を執筆担当Agentが
-再構成したニュースレター記事(`OODArticle.article_markdown`)です。調査担当Agentが
+保存されるのは、執筆担当Agentが調査担当Agentの構造化出力(`OODReport`)を基に
+執筆したニュースレター記事(`OODArticle.article_markdown`)です。調査担当Agentが
 出力する構造化項目(`OODReport.entries`)から`templates/report_markdown.j2`で
 生成する箇条書き中心の報告文は、執筆担当Agentへの入力としてのみ使われ、ファイルにも
 標準出力にも現れません。

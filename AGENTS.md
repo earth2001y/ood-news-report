@@ -41,7 +41,7 @@ CLI エージェント。
       （`ood_research_log_YYYYMMDD_HHMM.json`）とし、`append_log` は既存ファイルへ追記せず
       新しいファイルを書き出す。`load_log` は上限の範囲で複数ファイルを読み込み、各ファイルの
       `entries` を結合して 1 つの Markdown にする。記録するのは `OODReport.entries` であり、
-      再構成後の記事ではない。
+      執筆後の記事ではない。
     - `write_report_file`: 記事を `$OUTDIR/report_YYYYMMDD_HHMM.md` に保存する。
     - `describe_api_error`: OpenAI API のエラーを、対処方法を含む英語メッセージに
       変換する。対処方法の文言は `API_ERROR_HINTS` に集約する。
@@ -52,7 +52,7 @@ CLI エージェント。
     英語で出力させる。
   - `researcher.py`: 調査担当 Agent。Agent と入力プロンプトの構築、Web 検索を伴う実行を担う。
   - `writer.py`: 執筆担当 Agent。`OODArticle` の出力スキーマ、`CATEGORY_DESCRIPTIONS`、
-    Agent と入力プロンプトの構築、記事再構成の実行を担う。調査結果の日本語化はこの
+    Agent と入力プロンプトの構築、記事執筆の実行を担う。調査結果の日本語化はこの
     Agent の役割である。入力の事実を理解するため Web 検索ツールを持つが、検索で得た
     新たな事実を記事へ追加しないよう指示する。
   - `prompt_templates.py`: ルートの `templates/` にある Jinja2 テンプレートを

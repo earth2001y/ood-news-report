@@ -28,11 +28,12 @@ class TestBuildWriterAgent:
         assert agent.output_type is OODArticle
         assert len(agent.tools) == 1
         assert "ニュースレター記事" in agent.instructions
+        assert "執筆するライター" in agent.instructions
 
 
-class TestComposeArticle:
+class TestWriteArticle:
     def test_returns_article_markdown_from_agent_output(self, monkeypatch):
-        # 対象: compose_article
+        # 対象: write_article
         # パターン: 執筆担当Agentの出力からarticle_markdownを取り出して返す
         class _FakeResult:
             final_output = OODArticle(article_markdown="# 記事本文")
@@ -42,12 +43,12 @@ class TestComposeArticle:
         )
         report = OODReport(entries=[make_entry()])
 
-        article = writer.compose_article(model="gpt-test", report=report, max_turns=12)
+        article = writer.write_article(model="gpt-test", report=report, max_turns=12)
 
         assert article == "# 記事本文"
 
     def test_passes_entries_and_report_to_agent(self, monkeypatch):
-        # 対象: compose_article
+        # 対象: write_article
         # パターン: 構造化項目から生成した報告文が入力に含まれる
         captured = {}
 
@@ -62,14 +63,14 @@ class TestComposeArticle:
         monkeypatch.setattr(writer.Runner, "run_sync", _fake_run_sync)
         report = OODReport(entries=[make_entry()])
 
-        writer.compose_article(model="gpt-test", report=report, max_turns=12)
+        writer.write_article(model="gpt-test", report=report, max_turns=12)
 
         assert "v3.1.0" in captured["input"]
         assert "## new_release" in captured["input"]
         assert captured["max_turns"] == 12
 
     def test_builds_instructions_for_categories_present_in_report(self, monkeypatch):
-        # 対象: writer.compose_article
+        # 対象: writer.write_article
         # パターン: 調査結果に項目があるカテゴリだけを執筆対象として指示する
         captured = {}
 
@@ -83,14 +84,14 @@ class TestComposeArticle:
         monkeypatch.setattr(writer.Runner, "run_sync", _fake_run_sync)
         report = OODReport(entries=[make_entry(category="community_event")])
 
-        writer.compose_article(model="gpt-test", report=report, max_turns=12)
+        writer.write_article(model="gpt-test", report=report, max_turns=12)
 
         instructions = captured["instructions"]
         assert "1. Community events (`community_event`)" in instructions
         assert "New version releases (`new_release`)" not in instructions
 
     def test_passes_category_and_status_to_writer_in_english(self, monkeypatch):
-        # 対象: compose_article
+        # 対象: write_article
         # パターン: カテゴリ・更新区分を日本語化せず、英語の識別子のまま執筆担当へ渡す
         captured = {}
 
@@ -108,7 +109,7 @@ class TestComposeArticle:
             ]
         )
 
-        writer.compose_article(model="gpt-test", report=report, max_turns=12)
+        writer.write_article(model="gpt-test", report=report, max_turns=12)
 
         assert "Category: security" in captured["input"]
         assert "Status: updated" in captured["input"]
