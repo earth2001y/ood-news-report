@@ -10,31 +10,31 @@ $LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.
 
 使い方:
     export OPENAI_API_KEY=sk-...
-    python ood_news_agent.py
+    python -m ood_news_agent
 
     # ログ保存先やモデル、レポート出力先を変える場合
-    OUTDIR=./output LOGDIR=./logs python ood_news_agent.py --model gpt-5.4
+    OUTDIR=./output LOGDIR=./logs python -m ood_news_agent --model gpt-5.4
 
     # 記事再構成だけ別のモデルで行う場合
-    python ood_news_agent.py --writer-model gpt-5.4
+    python -m ood_news_agent --writer-model gpt-5.4
 
     # 調査対象期間(日数)を変える場合
-    python ood_news_agent.py --window-days 30
+    python -m ood_news_agent --window-days 30
 
     # 調査担当Agentへ渡す過去の調査ログを直近5回分に制限する場合
-    python ood_news_agent.py --max-log-runs 5
-    MAX_LOG_RUNS=5 python ood_news_agent.py
+    python -m ood_news_agent --max-log-runs 5
+    MAX_LOG_RUNS=5 python -m ood_news_agent
 
     # 調査対象期間の基準日を指定する場合(既定は実行日)
-    python ood_news_agent.py --base-date 2026-07-31
-    BASE_DATE=2026-07-31 python ood_news_agent.py
+    python -m ood_news_agent --base-date 2026-07-31
+    BASE_DATE=2026-07-31 python -m ood_news_agent
 
     # 進捗を表示する場合(既定のログレベルは WARNING)
-    python ood_news_agent.py --log-level INFO
-    OOD_LOG_LEVEL=INFO python ood_news_agent.py
+    python -m ood_news_agent --log-level INFO
+    OOD_LOG_LEVEL=INFO python -m ood_news_agent
 
     # APIで調査・記事再構成を行い、結果を標準出力にだけ表示する場合
-    python ood_news_agent.py --dry-run
+    python -m ood_news_agent --dry-run
 """
 
 from __future__ import annotations
@@ -46,15 +46,15 @@ import os
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from agents import Agent, Runner, WebSearchTool
 from dotenv import load_dotenv
-from jinja2 import Environment, FileSystemLoader
 from openai import APIError
-from pydantic import BaseModel, Field
+
+from .news_models import CATEGORIES, OODReport, ReportItem
+from .researcher import run_researcher
+from .writer import compose_article
 
 load_dotenv()
 
@@ -77,35 +77,6 @@ BASE_DATE_FORMAT = "%Y-%m-%d"
 DEFAULT_LOG_LEVEL = "WARNING"
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-
-# カテゴリと状態は、Agentの構造化出力・ログの照合キーであるため英語の識別子で持つ。
-# 調査結果は執筆担当Agentへ渡すまで英語で一貫させ、日本語化は執筆担当Agentに任せる。
-CATEGORIES = [
-    "new_release",
-    "roadmap",
-    "security",
-    "community_event",
-    "other_topic",
-]
-
-# 識別子だけでは意図が伝わらないため、執筆担当Agentへの指示文で各カテゴリの内容を
-# 英語で説明する。見出しの日本語表現は執筆担当Agentが決める。
-CATEGORY_DESCRIPTIONS = {
-    "new_release": "New version releases",
-    "roadmap": "Development roadmap updates and announcements",
-    "security": "Security vulnerabilities",
-    "community_event": "Community events",
-    "other_topic": "Other topics",
-}
-
-STATUSES = ["new", "updated"]
-
-_jinja_env = Environment(
-    loader=FileSystemLoader(TEMPLATES_DIR),
-    keep_trailing_newline=True,
-)
 
 
 def setup_logging(level_name: str | None = DEFAULT_LOG_LEVEL) -> int:
@@ -274,162 +245,6 @@ def resolve_outdir() -> Path:
     return outdir
 
 
-def render_template(name: str, **context: object) -> str:
-    """`templates/` ディレクトリのJinja2テンプレートをレンダリングする。
-
-    [実装理由] Agentへの指示文やユーザー入力プロンプトをPythonコード中にf文字列でハードコードする
-    と、文言調整のたびにコード変更が必要になりレビューもしづらいため、テンプレートファイルに分離して
-    いる。
-
-    Args:
-        name: `templates/` ディレクトリ内のテンプレートファイル名。
-        **context: テンプレートに渡す変数。
-
-    Returns:
-        レンダリング済みの文字列。
-    """
-    return _jinja_env.get_template(name).render(**context)
-
-
-class ReportItem(BaseModel):
-    category: Literal[
-        "new_release",
-        "roadmap",
-        "security",
-        "community_event",
-        "other_topic",
-    ] = Field(description="One of the five categories")
-    status: Literal["new", "updated"] = Field(
-        description='"new" for items absent from the log, "updated" for reported items that '
-        "changed. Omit unchanged items entirely."
-    )
-    title: str = Field(description="Item title (version name, CVE ID, event name, etc.)")
-    item_date: str = Field(
-        description="Publication or update date in YYYY-MM-DD format. Empty string if unknown."
-    )
-    url: str = Field(description="URL of the information source")
-    summary: str = Field(description="Concise summary in English")
-    change_note: str = Field(
-        default="",
-        description=(
-            'When status is "updated", state in English what changed and how. '
-            "Empty string for new items."
-        ),
-    )
-
-
-class OODReport(BaseModel):
-    entries: list[ReportItem] = Field(
-        description='Only the items reported as "new" or "updated" this run '
-        "(exclude unchanged items)"
-    )
-
-
-class OODArticle(BaseModel):
-    article_markdown: str = Field(
-        description="調査結果を再構成した、日本語のニュースレター記事本文(Markdown)"
-    )
-
-
-def build_researcher_agent(model: str) -> Agent:
-    """Open OnDemand調査用の調査担当Agentを構築する。
-
-    [実装理由] WebSearchToolによるWeb検索と、構造化出力(OODReport)を組み合わせたAgentを生成する。
-    ログ保存用データ(entries)だけを出力させるのは、レポート本文をLLMの自由記述に委ねず、
-    呼び出し側で決定的に組み立てられるようにするため。
-
-    Args:
-        model: 使用するモデル名。WebSearchTool(Responses API)対応モデルを指定する。
-
-    Returns:
-        調査・報告用に指示文とツールを設定済みのAgentインスタンス。
-    """
-    instructions = render_template("researcher_instructions.j2")
-    return Agent(
-        name="OOD News Reporter",
-        instructions=instructions,
-        model=model,
-        tools=[WebSearchTool(search_context_size="medium")],
-        output_type=OODReport,
-    )
-
-
-def build_writer_agent(model: str, categories: list[str] | None = CATEGORIES) -> Agent:
-    """調査結果をニュースレター記事へ再構成するAgentを構築する。
-
-    [実装理由] 調査担当Agentの出力は箇条書き中心の報告文であり、読み物としての流れを欠く。
-    同じAgentに調査と執筆の両方を担わせると、Web検索の途中経過が文章構成の判断に混ざり、
-    どちらの品質も安定しないため、執筆専用のAgentとして分離している。
-    WebSearchToolは入力の事実を理解するための補足調査に限定し、検索で得た新たな事実は記事に
-    追加しないよう指示文で制約している。
-    英語の調査結果から日本語記事への翻訳もこのAgentの責務とし、カテゴリの識別子と内容の説明
-    (CATEGORY_DESCRIPTIONS)だけを渡す。日本語の見出しを呼び出し側で固定しないのは、翻訳の判断を
-    執筆担当に一元化し、記事全体で用語と文体を揃えられるようにするためである。
-
-    Args:
-        model: 使用するモデル名。WebSearchTool(Responses API)対応モデルを指定する。
-        categories: 記事に含めるカテゴリ。省略時は全カテゴリを対象にする。
-
-    Returns:
-        記事執筆用に指示文と出力スキーマを設定済みのAgentインスタンス。
-    """
-    target_categories = categories if categories is not None else CATEGORIES
-    instructions = render_template(
-        "writer_instructions.j2",
-        categories=target_categories,
-        category_descriptions=CATEGORY_DESCRIPTIONS,
-    )
-    return Agent(
-        name="OOD News Writer",
-        instructions=instructions,
-        model=model,
-        tools=[WebSearchTool(search_context_size="medium")],
-        output_type=OODArticle,
-    )
-
-
-def compose_article(
-    writer: Agent,
-    report: OODReport,
-    base_date: str,
-    window_start: str,
-    window_days: int,
-    max_turns: int,
-) -> str:
-    """調査結果(OODReport)を執筆担当Agentに渡し、記事本文を得る。
-
-    [実装理由] 執筆担当Agentへの入力組み立てと実行をmainから切り出しているのは、入力に含める情報
-    (構造化された項目一覧とテンプレートで生成した報告文)の範囲がこのステップの出力品質を左右する
-    設計上の要点であり、単独で読めて単独でテストできる形にしておきたいためである。
-
-    Args:
-        writer: build_writer_agentで構築した執筆担当Agent。
-        report: 調査担当Agentの構造化出力。
-        base_date: 調査対象期間の基準日(YYYY-MM-DD)。期間の終端にあたる。
-        window_start: 調査対象期間の開始日(YYYY-MM-DD)。
-        window_days: 調査対象期間の日数。
-        max_turns: Agent実行の最大ターン数。
-
-    Returns:
-        再構成された記事本文(Markdown)。
-    """
-    prompt = render_template(
-        "writer_input.j2",
-        base_date=base_date,
-        window_start=window_start,
-        window_days=window_days,
-        entries=report.entries,
-        report_markdown=render_template(
-            "report_markdown.j2",
-            categories=CATEGORIES,
-            entries=report.entries,
-        ),
-    )
-    result = Runner.run_sync(writer, input=prompt, max_turns=max_turns)
-    article: OODArticle = result.final_output
-    return article.article_markdown
-
-
 def read_log_entries(log_path: Path) -> list[dict]:
     """調査回1件分のログファイルからentriesを取り出す。
 
@@ -526,11 +341,7 @@ def append_log(
         return None
     record = {
         "datetime": run_at.isoformat(),
-        "period": {
-            "start": window_start,
-            "end": base_date,
-            "days": window_days,
-        },
+        "period": {"start": window_start, "end": base_date, "days": window_days},
         "entries": [entry.model_dump() for entry in entries],
     }
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -582,10 +393,7 @@ def post_to_slack(webhook_url: str, article_markdown: str) -> None:
     slack_text = markdown_to_slack_mrkdwn(article_markdown)
     payload = json.dumps({"text": slack_text}, ensure_ascii=False).encode("utf-8")
     request = Request(
-        webhook_url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        webhook_url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
     )
     with urlopen(request, timeout=SLACK_TIMEOUT_SECONDS) as response:
         if response.status != 200:
@@ -736,29 +544,23 @@ def run_researcher_agent(
     別の関数で見通しよく保守できるようにしている。これにより main は制御フローに集中し、
     80 行を超えない長さを維持できる。
     """
-    researcher = build_researcher_agent(model=args.model)
-    prompt = render_template(
-        "researcher_input.j2",
-        base_date=base_date.isoformat(),
-        window_start=window_start.isoformat(),
-        window_days=window_days,
-        existing_log=existing_log,
-    )
     period = f"{window_start.isoformat()} to {base_date.isoformat()}"
     logger.info("Researching the latest Open OnDemand news... (period: %s)", period)
     try:
-        result = Runner.run_sync(researcher, input=prompt, max_turns=args.max_turns)
+        return run_researcher(
+            model=args.model,
+            existing_log=existing_log,
+            base_date=base_date.isoformat(),
+            window_start=window_start.isoformat(),
+            window_days=window_days,
+            max_turns=args.max_turns,
+        )
     except APIError as e:
         logger.error("Research failed. %s", describe_api_error(e))
         return None
-    return result.final_output
 
 
-def persist_report(
-    article_markdown: str,
-    outdir: Path,
-    run_at: datetime,
-) -> Path | None:
+def persist_report(article_markdown: str, outdir: Path, run_at: datetime) -> Path | None:
     """記事をファイルへ保存し、設定があればSlackへ通知する。
 
     [実装理由] 永続化処理を独立した関数に切り出して、finalize_report の分岐を浅く保つ。
@@ -794,19 +596,10 @@ def run_writer_agent(
     Agent実行の失敗と副作用を伴う永続化処理を独立して扱えるようにしている。
     """
     logger.info("Composing a newsletter article from the research results...")
-    categories = [
-        category
-        for category in CATEGORIES
-        if any(entry.category == category for entry in report.entries)
-    ]
-    writer = build_writer_agent(
-        model=model,
-        categories=categories,
-    )
     try:
         article_markdown = compose_article(
-            writer,
-            report,
+            model=model,
+            report=report,
             base_date=base_date.isoformat(),
             window_start=window_start.isoformat(),
             window_days=window_days,
@@ -842,11 +635,7 @@ def finalize_report(
         logger.info("Dry run: skipping research log, report, and Slack delivery")
         return article_markdown, None
 
-    path = persist_report(
-        article_markdown,
-        resolve_outdir(),
-        run_at,
-    )
+    path = persist_report(article_markdown, resolve_outdir(), run_at)
     if path is None:
         return None
 
@@ -885,13 +674,7 @@ def main() -> int:
     window_days = args.window_days if args.window_days is not None else DEFAULT_WINDOW_DAYS
     window_start = base_date - timedelta(days=window_days)
     existing_log = load_log(log_dir, resolve_max_log_runs(args.max_log_runs))
-    report = run_researcher_agent(
-        args,
-        existing_log,
-        base_date,
-        window_start,
-        window_days,
-    )
+    report = run_researcher_agent(args, existing_log, base_date, window_start, window_days)
     if report is None:
         return 1
 
@@ -912,24 +695,12 @@ def main() -> int:
 
     writer_model = args.writer_model or args.model
     article_markdown = run_writer_agent(
-        args,
-        report,
-        log_path or log_dir,
-        writer_model,
-        base_date,
-        window_start,
-        window_days,
+        args, report, log_path or log_dir, writer_model, base_date, window_start, window_days
     )
     if article_markdown is None:
         return 1
 
-    result = finalize_report(
-        args,
-        report,
-        log_path or log_dir,
-        run_at,
-        article_markdown,
-    )
+    result = finalize_report(args, report, log_path or log_dir, run_at, article_markdown)
     if result is None:
         return 1
     return 0

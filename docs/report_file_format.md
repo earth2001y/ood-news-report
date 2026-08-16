@@ -1,6 +1,6 @@
 # レポートファイル フォーマット仕様
 
-[ood_news_agent.py](../ood_news_agent.py) は、実行するたびに調査レポートを
+[ood_news_agent/cli.py](../ood_news_agent/cli.py) は、実行するたびに調査レポートを
 標準出力に表示するのと同時に、`$OUTDIR/report_YYYYMMDD_HHMM.md` としても
 保存します。書き込み処理は `write_report_file` 関数が担います。
 

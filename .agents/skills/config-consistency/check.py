@@ -116,10 +116,7 @@ def check_rule_paths() -> None:
                 continue
             regex = glob_to_regex(pattern)
             if not any(regex.match(f) for f in py_files):
-                report(
-                    "rules",
-                    f"{rel}: paths の '{pattern}' にマッチするファイルが無い",
-                )
+                report("rules", f"{rel}: paths の '{pattern}' にマッチするファイルが無い")
 
 
 def check_no_duplication() -> None:
@@ -196,10 +193,7 @@ def check_skills() -> None:
         if not declared:
             report("skills", f"{name}: name: が無い")
         elif declared.group(1) != name:
-            report(
-                "skills",
-                f"{name}: name '{declared.group(1)}' がディレクトリ名と不一致",
-            )
+            report("skills", f"{name}: name '{declared.group(1)}' がディレクトリ名と不一致")
         if not re.search(r"^description:\s*\S", front, re.M):
             report("skills", f"{name}: description: が無い（自動呼び出しされない）")
 

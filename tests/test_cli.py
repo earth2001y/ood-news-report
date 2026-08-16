@@ -1,4 +1,4 @@
-"""ood_news_agent.py の各関数に対するユニットテスト。"""
+"""ood_news_agent.cli のCLI・ログ・保存処理を検証する。"""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import json
 import logging
 import sys
 from datetime import date, datetime
-from typing import get_args
 
 import httpx
 import pytest
 from openai import APIConnectionError, RateLimitError
 
-import ood_news_agent as ood
-from ood_news_agent import OODArticle, OODReport, ReportItem
+import ood_news_agent.cli as ood
+from ood_news_agent.news_models import OODReport
+from tests.factories import make_entry as _make_entry
 
 
 @pytest.fixture(autouse=True)
@@ -28,20 +28,6 @@ def _clear_optional_env(monkeypatch):
         "OUTDIR",
     ):
         monkeypatch.delenv(name, raising=False)
-
-
-def _make_entry(**overrides):
-    defaults = dict(
-        category="new_release",
-        status="new",
-        title="v3.1.0",
-        item_date="2026-08-01",
-        url="https://example.com/v3.1.0",
-        summary="Adds new features.",
-        change_note="",
-    )
-    defaults.update(overrides)
-    return ReportItem(**defaults)
 
 
 def _make_api_error(code="credit_balance_exhausted", status=429, message="no credits remaining"):
@@ -61,31 +47,19 @@ def _raise(error):
 
 
 def _stub_agents(monkeypatch, report, article_markdown):
-    """main が実行する調査・執筆の2つのAgentをモックに置き換え、渡されたモデル名を記録する。"""
+    """main が呼び出す調査・執筆モジュールをモックに置き換え、モデル名を記録する。"""
     models = {}
 
-    class _Sentinel:
-        def __init__(self, kind):
-            self.kind = kind
+    def _run_researcher(**kwargs):
+        models["researcher"] = kwargs["model"]
+        return report
 
-    def _build_researcher_agent(model):
-        models["researcher"] = model
-        return _Sentinel("researcher")
+    def _compose_article(**kwargs):
+        models["writer"] = kwargs["model"]
+        return article_markdown
 
-    def _build_writer_agent(model, categories=None):
-        models["writer"] = model
-        if categories is not None:
-            models["writer_categories"] = categories
-        return _Sentinel("writer")
-
-    def _run_sync(agent, input, max_turns):
-        is_researcher = agent.kind == "researcher"
-        output = report if is_researcher else OODArticle(article_markdown=article_markdown)
-        return type("_FakeResult", (), {"final_output": output})
-
-    monkeypatch.setattr(ood, "build_researcher_agent", _build_researcher_agent)
-    monkeypatch.setattr(ood, "build_writer_agent", _build_writer_agent)
-    monkeypatch.setattr(ood.Runner, "run_sync", _run_sync)
+    monkeypatch.setattr(ood, "run_researcher", _run_researcher)
+    monkeypatch.setattr(ood, "compose_article", _compose_article)
     return models
 
 
@@ -156,8 +130,7 @@ class TestResolveBaseDate:
         assert ood.resolve_base_date("2026-07-31", run_at) == date(2026, 7, 31)
 
     @pytest.mark.parametrize(
-        "given",
-        ["2026/07/31", "20260731", "2026-13-01", "2026-07-32", "昨日", "", "2026-07"],
+        "given", ["2026/07/31", "20260731", "2026-13-01", "2026-07-32", "昨日", "", "2026-07"]
     )
     def test_invalid_format_raises_value_error(self, given):
         # 対象: resolve_base_date
@@ -170,235 +143,6 @@ class TestResolveBaseDate:
         # パターン: 未来日でも拒否しない(先の期間を指定する用途を妨げない)
         run_at = datetime(2026, 8, 14, 9, 57)
         assert ood.resolve_base_date("2026-12-31", run_at) == date(2026, 12, 31)
-
-
-class TestReportItemCategory:
-    def test_literal_matches_categories(self):
-        # 対象: ReportItem.category
-        # パターン: 許容値がCATEGORIESと順序を含めて一致する（定義の二重管理による乖離の検出）
-        allowed = get_args(ReportItem.model_fields["category"].annotation)
-        assert list(allowed) == ood.CATEGORIES
-
-    def test_accepts_other_topics(self):
-        # パターン: 追加カテゴリ「その他のトピック」の項目を構築できる
-        entry = _make_entry(category="other_topic")
-        assert entry.category == "other_topic"
-
-    def test_status_literal_matches_statuses(self):
-        # 対象: ReportItem.status
-        # パターン: 許容値がSTATUSESと順序を含めて一致する（定義の二重管理による乖離の検出）
-        allowed = get_args(ReportItem.model_fields["status"].annotation)
-        assert list(allowed) == ood.STATUSES
-
-    def test_category_descriptions_cover_all_categories(self):
-        # 対象: CATEGORY_DESCRIPTIONS
-        # パターン: 全カテゴリキーに英語の説明が定義され、順序もCATEGORIESと一致する
-        assert list(ood.CATEGORY_DESCRIPTIONS) == ood.CATEGORIES
-
-    def test_category_descriptions_are_english(self):
-        # 対象: CATEGORY_DESCRIPTIONS
-        # パターン: 説明に日本語(全角)を含まない（執筆担当への入力を英語で統一する）
-        joined = "".join(ood.CATEGORY_DESCRIPTIONS.values())
-        assert joined.isascii()
-
-
-class TestRenderTemplate:
-    def test_instructions_contains_all_categories(self):
-        # 対象: render_template("researcher_instructions.j2")
-        # パターン: 全カテゴリのスキーマ値が指示文に含まれる
-        rendered = ood.render_template("researcher_instructions.j2")
-        for category in ood.CATEGORIES:
-            assert category in rendered
-
-    def test_instructions_specifies_english_status_values(self):
-        # 対象: render_template("researcher_instructions.j2")
-        # パターン: statusに設定する英語の識別子が指示文に明示される
-        rendered = ood.render_template("researcher_instructions.j2")
-        assert 'status="new"' in rendered
-        assert 'status="updated"' in rendered
-
-    def test_researcher_instructions_uses_structured_entries_only(self):
-        # 対象: render_template("researcher_instructions.j2")
-        # パターン: 調査担当の出力形式がentriesだけを要求する
-        rendered = ood.render_template("researcher_instructions.j2")
-        assert "【出力形式(entries)】" in rendered
-        assert "report_markdown" not in rendered
-
-    def test_report_markdown_renders_entries_and_unchanged_categories(self):
-        # 対象: render_template("report_markdown.j2")
-        # パターン: entriesから項目を分類し、空カテゴリは"No changes"とする(全て英語)
-        rendered = ood.render_template(
-            "report_markdown.j2",
-            categories=ood.CATEGORIES,
-            entries=[_make_entry(status="updated", change_note="Severity raised to Critical.")],
-        )
-        assert "## new_release" in rendered
-        assert "- [updated] v3.1.0 (2026-08-01) - Adds new features." in rendered
-        assert "Change: Severity raised to Critical." in rendered
-        assert "## roadmap" in rendered
-        assert rendered.count("No changes") == len(ood.CATEGORIES) - 1
-
-    def test_report_markdown_contains_no_japanese(self):
-        # 対象: render_template("report_markdown.j2")
-        # パターン: 調査結果の報告文に日本語を含めない(日本語化は執筆担当の役割)
-        rendered = ood.render_template(
-            "report_markdown.j2",
-            categories=ood.CATEGORIES,
-            entries=[_make_entry(status="updated", change_note="CVSS raised to 9.1")],
-        )
-        assert rendered.isascii()
-
-    def test_writer_instructions_lists_categories_in_order(self):
-        # 対象: render_template("writer_instructions.j2")
-        # パターン: categoriesを渡すと全カテゴリがCATEGORIESの順に番号付きで並ぶ
-        rendered = ood.render_template(
-            "writer_instructions.j2",
-            categories=ood.CATEGORIES,
-            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
-        )
-        positions = [rendered.index(f"`{category}`") for category in ood.CATEGORIES]
-        assert positions == sorted(positions)
-        assert f"1. {ood.CATEGORY_DESCRIPTIONS[ood.CATEGORIES[0]]} (`{ood.CATEGORIES[0]}`)" in (
-            rendered
-        )
-
-    def test_writer_instructions_forbids_bracket_labels_and_allows_supplemental_search(self):
-        # 対象: render_template("writer_instructions.j2")
-        # パターン: 角括弧ラベルを禁止し、事実の補足検索を許可する
-        rendered = ood.render_template(
-            "writer_instructions.j2",
-            categories=ood.CATEGORIES,
-            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
-        )
-        assert "角括弧ラベルは使わない" in rendered
-        assert "補足情報獲得のためのWeb検索はしてよい" in rendered
-        assert "事実の追加・推測・脚色は一切しない" in rendered
-
-    def test_writer_instructions_constrains_other_topic_title_and_relations(self):
-        # 対象: render_template("writer_instructions.j2")
-        # パターン: other_topicのみの場合の見出し制約と、項目間の関連への言及を指示する
-        rendered = ood.render_template(
-            "writer_instructions.j2",
-            categories=ood.CATEGORIES,
-            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
-        )
-        assert "更新カテゴリが other_topic だけの場合" in rendered
-        assert "各記事の間に関連がある場合" in rendered
-
-    def test_writer_instructions_lists_only_target_categories(self):
-        # 対象: render_template("writer_instructions.j2")
-        # パターン: 執筆対象として渡したカテゴリだけが指示文に含まれる
-        target = [ood.CATEGORIES[0], ood.CATEGORIES[3]]
-        rendered = ood.render_template(
-            "writer_instructions.j2",
-            categories=target,
-            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
-        )
-        assert f"1. {ood.CATEGORY_DESCRIPTIONS['new_release']} (`new_release`)" in rendered
-        assert f"2. {ood.CATEGORY_DESCRIPTIONS['community_event']} (`community_event`)" in rendered
-        assert "`roadmap`" not in rendered
-        assert "`security`" not in rendered
-
-    def test_writer_input_embeds_entries_and_report(self):
-        # 対象: render_template("writer_input.j2")
-        # パターン: 調査レポート本文には期間表記を入れず、各項目と報告文のみが埋め込まれる
-        rendered = ood.render_template(
-            "writer_input.j2",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            entries=[_make_entry(status="updated", change_note="Severity raised to Critical.")],
-        )
-        assert "調査対象期間:" not in rendered
-        assert "2026-07-14 〜 2026-08-13" not in rendered
-        assert "v3.1.0" in rendered
-        assert "https://example.com/v3.1.0" in rendered
-        assert "Severity raised to Critical." in rendered
-
-    def test_writer_input_passes_research_result_in_english(self):
-        # 対象: render_template("writer_input.j2")
-        # パターン: 調査結果のカテゴリ・更新区分を英語の識別子のまま渡す
-        rendered = ood.render_template(
-            "writer_input.j2",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            entries=[_make_entry(category="security", status="updated", change_note="CVSS 9.1")],
-        )
-        assert "Category: security" in rendered
-        assert "Status: updated" in rendered
-        assert "セキュリティ脆弱性情報" not in rendered
-        assert "更新" not in rendered
-
-    def test_writer_input_marks_empty_entries(self):
-        # 対象: render_template("writer_input.j2")
-        # パターン: entriesが空の場合、新規・更新なしを示す文言が入る
-        rendered = ood.render_template(
-            "writer_input.j2",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            entries=[],
-        )
-        assert "(No new or updated items in this period)" in rendered
-
-    def test_writer_input_marks_unknown_item_date(self):
-        # 対象: render_template("writer_input.j2")
-        # パターン: item_dateが空文字の場合、日付が不明であることを明示する
-        rendered = ood.render_template(
-            "writer_input.j2",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            entries=[_make_entry(item_date="")],
-        )
-        assert "Date: (unknown)" in rendered
-
-    def test_user_input_embeds_context_variables(self):
-        # 対象: render_template("researcher_input.j2")
-        # パターン: base_date/window_start/window_days/existing_logが本文に埋め込まれる
-        rendered = ood.render_template(
-            "researcher_input.j2",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            existing_log="(まだ記録はありません。今回が初回実行です)",
-        )
-        assert "調査の基準日: 2026-08-13" in rendered
-        assert "2026-07-14 〜 2026-08-13" in rendered
-        assert "30日間" in rendered
-        assert "(まだ記録はありません。今回が初回実行です)" in rendered
-
-    def test_user_input_excludes_items_after_base_date(self):
-        # 対象: render_template("researcher_input.j2")
-        # パターン: 基準日より後の情報を対象外とする指示が含まれる
-        rendered = ood.render_template(
-            "researcher_input.j2",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            existing_log="(初回実行)",
-        )
-        assert "基準日より後に公開・更新された情報" in rendered
-        assert "報告に含めない" in rendered
-
-    def test_researcher_input_lists_flat_entries_without_log_metadata(self):
-        # 対象: render_template("researcher_input.j2")
-        # パターン: 前回ログのentriesだけを調査回の区切りなしで埋め込む
-        rendered = ood.render_template(
-            "researcher_input.j2",
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            existing_log=json.dumps(
-                [{"title": "v3.1.0"}, {"title": "CVE-2026-0001"}],
-                ensure_ascii=False,
-            ),
-        )
-        assert '"title": "v3.1.0"' in rendered
-        assert '"title": "CVE-2026-0001"' in rendered
-        assert "datetime" not in rendered
-        assert "period" not in rendered
 
 
 def _write_log_file(log_dir, timestamp, entries):
@@ -556,21 +300,12 @@ class TestAppendLog:
         # パターン: 調査回ごとに実行日時を含む名前のファイルを作り、対象期間を記録する
         log_dir = tmp_path / "logs"
         path = ood.append_log(
-            log_dir,
-            datetime(2026, 8, 13, 9, 30),
-            [_make_entry()],
-            "2026-07-14",
-            "2026-08-13",
-            30,
+            log_dir, datetime(2026, 8, 13, 9, 30), [_make_entry()], "2026-07-14", "2026-08-13", 30
         )
         assert path == log_dir / "ood_research_log_20260813_0930.json"
         record = json.loads(path.read_text(encoding="utf-8"))
         assert record["datetime"] == "2026-08-13T09:30:00"
-        assert record["period"] == {
-            "start": "2026-07-14",
-            "end": "2026-08-13",
-            "days": 30,
-        }
+        assert record["period"] == {"start": "2026-07-14", "end": "2026-08-13", "days": 30}
         assert record["entries"] == [_make_entry().model_dump()]
 
     def test_separate_runs_are_written_to_separate_files(self, tmp_path):
@@ -630,12 +365,7 @@ class TestAppendLog:
             _make_entry(category="new_release", title="v3.1.0"),
         ]
         path = ood.append_log(
-            tmp_path,
-            datetime(2026, 8, 13, 9, 30),
-            entries,
-            "2026-07-14",
-            "2026-08-13",
-            30,
+            tmp_path, datetime(2026, 8, 13, 9, 30), entries, "2026-07-14", "2026-08-13", 30
         )
         record = json.loads(path.read_text(encoding="utf-8"))
         assert [entry["category"] for entry in record["entries"]] == [
@@ -648,12 +378,7 @@ class TestAppendLog:
         # パターン: status="updated"の項目がchange_note付きで記録される
         entry = _make_entry(status="updated", change_note="深刻度がCriticalに変更")
         path = ood.append_log(
-            tmp_path,
-            datetime(2026, 8, 13, 9, 30),
-            [entry],
-            "2026-07-14",
-            "2026-08-13",
-            30,
+            tmp_path, datetime(2026, 8, 13, 9, 30), [entry], "2026-07-14", "2026-08-13", 30
         )
         record = json.loads(path.read_text(encoding="utf-8"))
         assert record["entries"][0]["status"] == "updated"
@@ -739,112 +464,6 @@ class TestPostToSlack:
             ood.post_to_slack("https://hooks.slack.com/services/test", "記事本文")
 
 
-class TestBuildResearcherAgent:
-    def test_sets_model_instructions_and_output_type(self):
-        # 対象: build_researcher_agent
-        # パターン: 指定したmodel・instructions・output_type・toolsが設定される
-        researcher = ood.build_researcher_agent(model="gpt-5.4")
-        assert researcher.model == "gpt-5.4"
-        assert researcher.output_type is OODReport
-        assert "Open OnDemand" in researcher.instructions
-        assert len(researcher.tools) == 1
-
-
-class TestBuildWriterAgent:
-    def test_sets_model_output_type_and_web_search_tool(self):
-        # 対象: build_writer_agent
-        # パターン: 出力スキーマがOODArticleで、Web検索ツールを1つ持つ
-        writer = ood.build_writer_agent(model="gpt-test")
-        assert writer.model == "gpt-test"
-        assert writer.output_type is OODArticle
-        assert len(writer.tools) == 1
-        assert "ニュースレター記事" in writer.instructions
-
-
-class TestComposeArticle:
-    def test_returns_article_markdown_from_agent_output(self, monkeypatch):
-        # 対象: compose_article
-        # パターン: 執筆担当Agentの出力からarticle_markdownを取り出して返す
-        class _FakeResult:
-            final_output = OODArticle(article_markdown="# 記事本文")
-
-        monkeypatch.setattr(ood.Runner, "run_sync", lambda agent, input, max_turns: _FakeResult())
-        report = OODReport(entries=[_make_entry()])
-
-        article = ood.compose_article(
-            object(),
-            report,
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            max_turns=12,
-        )
-
-        assert article == "# 記事本文"
-
-    def test_passes_entries_and_report_to_agent(self, monkeypatch):
-        # 対象: compose_article
-        # パターン: 構造化項目から生成した報告文が入力に含まれる
-        captured = {}
-
-        class _FakeResult:
-            final_output = OODArticle(article_markdown="# 記事本文")
-
-        def _fake_run_sync(agent, input, max_turns):
-            captured["input"] = input
-            captured["max_turns"] = max_turns
-            return _FakeResult()
-
-        monkeypatch.setattr(ood.Runner, "run_sync", _fake_run_sync)
-        report = OODReport(entries=[_make_entry()])
-
-        ood.compose_article(
-            object(),
-            report,
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            max_turns=12,
-        )
-
-        assert "v3.1.0" in captured["input"]
-        assert "## new_release" in captured["input"]
-        assert captured["max_turns"] == 12
-
-    def test_passes_category_and_status_to_writer_in_english(self, monkeypatch):
-        # 対象: compose_article
-        # パターン: カテゴリ・更新区分を日本語化せず、英語の識別子のまま執筆担当へ渡す
-        captured = {}
-
-        class _FakeResult:
-            final_output = OODArticle(article_markdown="# 記事本文")
-
-        def _fake_run_sync(agent, input, max_turns):
-            captured["input"] = input
-            return _FakeResult()
-
-        monkeypatch.setattr(ood.Runner, "run_sync", _fake_run_sync)
-        report = OODReport(
-            entries=[
-                _make_entry(category="security", status="updated", change_note="CVSS raised to 9.1")
-            ]
-        )
-
-        ood.compose_article(
-            object(),
-            report,
-            base_date="2026-08-13",
-            window_start="2026-07-14",
-            window_days=30,
-            max_turns=12,
-        )
-
-        assert "Category: security" in captured["input"]
-        assert "Status: updated" in captured["input"]
-        assert "## security" in captured["input"]
-        assert "セキュリティ脆弱性情報" not in captured["input"]
-
-
 class TestMainNoNewInformation:
     def test_skips_writing_when_research_has_no_new_information(
         self, monkeypatch, tmp_path, capsys
@@ -856,7 +475,7 @@ class TestMainNoNewInformation:
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
 
         assert ood.main() == 0
 
@@ -874,7 +493,7 @@ class TestParseArguments:
             sys,
             "argv",
             [
-                "ood_news_agent.py",
+                "ood_news_agent",
                 "--model",
                 "gpt-test",
                 "--writer-model",
@@ -900,28 +519,28 @@ class TestParseArguments:
         # 対象: build_parser
         # パターン: --base-date未指定かつ環境変数なしの場合、None(=実行日扱い)になる
         monkeypatch.delenv("BASE_DATE", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         assert ood.build_parser().parse_args().base_date is None
 
     def test_base_date_reads_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数 BASE_DATE が既定値として使われる
         monkeypatch.setenv("BASE_DATE", "2026-07-01")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         assert ood.build_parser().parse_args().base_date == "2026-07-01"
 
     def test_cli_base_date_overrides_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数より --base-date の指定が優先される
         monkeypatch.setenv("BASE_DATE", "2026-07-01")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--base-date", "2026-07-31"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--base-date", "2026-07-31"])
         assert ood.build_parser().parse_args().base_date == "2026-07-31"
 
     def test_writer_model_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --writer-model未指定かつ環境変数なしの場合、Noneになる
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         assert ood.build_parser().parse_args().writer_model is None
 
     def test_slack_webhook_url_is_not_a_cli_argument(self, monkeypatch):
@@ -930,7 +549,7 @@ class TestParseArguments:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["ood_news_agent.py", "--slack-webhook-url", "https://hooks.slack.com/services/test"],
+            ["ood_news_agent", "--slack-webhook-url", "https://hooks.slack.com/services/test"],
         )
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
@@ -938,14 +557,14 @@ class TestParseArguments:
     def test_outdir_is_not_a_cli_argument(self, monkeypatch):
         # 対象: build_parser
         # パターン: OUTDIR は環境変数でのみ指定し、CLI引数では受け付けない
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--outdir", "custom-output"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--outdir", "custom-output"])
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
 
     def test_logdir_is_not_a_cli_argument(self, monkeypatch):
         # 対象: build_parser
         # パターン: LOGDIR は環境変数でのみ指定し、CLI引数では受け付けない
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--logdir", "custom-logs"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--logdir", "custom-logs"])
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
 
@@ -953,48 +572,48 @@ class TestParseArguments:
         # 対象: build_parser
         # パターン: --log-level未指定かつ環境変数なしの場合、None(=既定値扱い)になる
         monkeypatch.delenv("OOD_LOG_LEVEL", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         assert ood.build_parser().parse_args().log_level is None
 
     def test_log_level_reads_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数 OOD_LOG_LEVEL が既定値として使われる
         monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         assert ood.build_parser().parse_args().log_level == "DEBUG"
 
     def test_cli_log_level_overrides_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数より --log-level の指定が優先される
         monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--log-level", "ERROR"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--log-level", "ERROR"])
         assert ood.build_parser().parse_args().log_level == "ERROR"
 
     def test_dry_run_is_enabled_by_option(self, monkeypatch):
         # 対象: build_parser
         # パターン: --dry-runを指定するとドライランが有効になる
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--dry-run"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--dry-run"])
         assert ood.build_parser().parse_args().dry_run is True
 
     def test_max_log_runs_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --max-log-runs未指定かつ環境変数なしの場合、None(=既定値扱い)になる
         monkeypatch.delenv("MAX_LOG_RUNS", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         assert ood.build_parser().parse_args().max_log_runs is None
 
     def test_max_log_runs_reads_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数 MAX_LOG_RUNS が既定値として使われる
         monkeypatch.setenv("MAX_LOG_RUNS", "5")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         assert ood.build_parser().parse_args().max_log_runs == 5
 
     def test_cli_max_log_runs_overrides_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数より --max-log-runs の指定が優先される
         monkeypatch.setenv("MAX_LOG_RUNS", "5")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--max-log-runs", "2"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--max-log-runs", "2"])
         assert ood.build_parser().parse_args().max_log_runs == 2
 
     def test_resolve_log_dir_uses_default_log_directory(self, monkeypatch, tmp_path):
@@ -1073,22 +692,11 @@ class TestMain:
             "post_to_slack",
             lambda *args: (_ for _ in ()).throw(AssertionError("Slack投稿が実行された")),
         )
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--dry-run",
-            ],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--dry-run"])
 
         assert ood.main() == 0
 
-        assert models == {
-            "researcher": "gpt-5.4",
-            "writer": "gpt-5.4",
-            "writer_categories": [ood.CATEGORIES[0]],
-        }
+        assert models == {"researcher": "gpt-5.4", "writer": "gpt-5.4"}
         assert capsys.readouterr().out.strip() == "# 記事本文"
         assert _written_log_files(log_dir) == []
         assert not outdir.exists()
@@ -1109,7 +717,7 @@ class TestMain:
             captured["article_markdown"] = article_markdown
 
         monkeypatch.setattr(ood, "post_to_slack", _post_to_slack)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
 
         assert ood.main() == 0
 
@@ -1128,19 +736,16 @@ class TestMain:
 
         empty_report = OODReport(entries=[])
 
-        def _run_sync(agent, input, max_turns):
-            captured_input.setdefault("text", input)
-            return type("_R", (), {"final_output": empty_report})
+        def _run_researcher(**kwargs):
+            captured_input.update(kwargs)
+            return empty_report
 
-        monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
-        monkeypatch.setattr(ood, "build_writer_agent", lambda model, categories=None: object())
-        monkeypatch.setattr(ood.Runner, "run_sync", _run_sync)
-        monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: "# 記事本文")
+        monkeypatch.setattr(ood, "run_researcher", _run_researcher)
         monkeypatch.setattr(
             sys,
             "argv",
             [
-                "ood_news_agent.py",
+                "ood_news_agent",
                 "--base-date",
                 "2026-07-31",
                 "--window-days",
@@ -1153,8 +758,9 @@ class TestMain:
         assert ood.main() == 0
 
         # 基準日を終端に、window-days 日前が開始日になる
-        assert "調査の基準日: 2026-07-31" in captured_input["text"]
-        assert "2026-07-21 〜 2026-07-31" in captured_input["text"]
+        assert captured_input["base_date"] == "2026-07-31"
+        assert captured_input["window_start"] == "2026-07-21"
+        assert captured_input["window_days"] == 10
         assert "2026-07-21 to 2026-07-31" in capsys.readouterr().err
 
     def test_base_date_does_not_change_report_filename(self, tmp_path, monkeypatch):
@@ -1167,15 +773,7 @@ class TestMain:
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--base-date",
-                "2020-01-01",
-            ],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--base-date", "2020-01-01"])
 
         assert ood.main() == 0
 
@@ -1189,11 +787,7 @@ class TestMain:
         assert log_files[0].name.startswith(f"ood_research_log_{today}_")
         record = json.loads(log_files[0].read_text(encoding="utf-8"))
         assert record["datetime"].startswith(datetime.now().strftime("%Y-%m-%dT"))
-        assert record["period"] == {
-            "start": "2019-12-02",
-            "end": "2020-01-01",
-            "days": 30,
-        }
+        assert record["period"] == {"start": "2019-12-02", "end": "2020-01-01", "days": 30}
 
     def test_invalid_base_date_returns_error_without_calling_api(
         self, tmp_path, monkeypatch, capsys
@@ -1206,19 +800,11 @@ class TestMain:
         outdir = tmp_path / "output"
         monkeypatch.setenv("OUTDIR", str(outdir))
 
-        def _must_not_run(agent, input, max_turns):
+        def _must_not_run(*args, **kwargs):
             raise AssertionError("基準日が不正なのにAgentが実行された")
 
-        monkeypatch.setattr(ood.Runner, "run_sync", _must_not_run)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--base-date",
-                "2026/07/31",
-            ],
-        )
+        monkeypatch.setattr(ood, "run_researcher", _must_not_run)
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--base-date", "2026/07/31"])
 
         assert ood.main() == 1
         err = capsys.readouterr().err
@@ -1235,7 +821,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
 
         assert ood.main() == 0
 
@@ -1253,15 +839,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--log-level",
-                "INFO",
-            ],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--log-level", "INFO"])
 
         assert ood.main() == 0
 
@@ -1280,15 +858,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(entries=[])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--log-level",
-                "VERBOSE",
-            ],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--log-level", "VERBOSE"])
 
         assert ood.main() == 0
         assert "Invalid log level 'VERBOSE'" in capsys.readouterr().err
@@ -1297,7 +867,7 @@ class TestMain:
         # 対象: main
         # パターン: OPENAI_API_KEY未設定時、終了コード1とERRORログを返す
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
         with caplog.at_level(logging.ERROR):
             exit_code = ood.main()
         assert exit_code == 1
@@ -1313,13 +883,8 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
-        monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
-        monkeypatch.setattr(
-            ood.Runner,
-            "run_sync",
-            lambda agent, input, max_turns: _raise(_make_api_error()),
-        )
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(ood, "run_researcher", lambda **kwargs: _raise(_make_api_error()))
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
 
         exit_code = ood.main()
 
@@ -1339,15 +904,9 @@ class TestMain:
         log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
-        monkeypatch.setattr(ood, "build_researcher_agent", lambda model: object())
-        monkeypatch.setattr(ood, "build_writer_agent", lambda model, categories=None: object())
-        monkeypatch.setattr(
-            ood.Runner,
-            "run_sync",
-            lambda agent, input, max_turns: type("_R", (), {"final_output": fake_report}),
-        )
+        monkeypatch.setattr(ood, "run_researcher", lambda **kwargs: fake_report)
         monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: _raise(_make_api_error()))
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
 
         exit_code = ood.main()
 
@@ -1370,7 +929,7 @@ class TestMain:
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 今回のニュースレター")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
 
         exit_code = ood.main()
 
@@ -1393,22 +952,10 @@ class TestMain:
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
         fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--model",
-                "gpt-test",
-            ],
-        )
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--model", "gpt-test"])
 
         assert ood.main() == 0
-        assert models == {
-            "researcher": "gpt-test",
-            "writer": "gpt-test",
-            "writer_categories": [ood.CATEGORIES[0]],
-        }
+        assert models == {"researcher": "gpt-test", "writer": "gpt-test"}
 
     def test_writer_model_overrides_model(self, tmp_path, monkeypatch):
         # 対象: main
@@ -1419,23 +966,11 @@ class TestMain:
         fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent.py",
-                "--model",
-                "gpt-test",
-                "--writer-model",
-                "gpt-writer",
-            ],
+            sys, "argv", ["ood_news_agent", "--model", "gpt-test", "--writer-model", "gpt-writer"]
         )
 
         assert ood.main() == 0
-        assert models == {
-            "researcher": "gpt-test",
-            "writer": "gpt-writer",
-            "writer_categories": [ood.CATEGORIES[0]],
-        }
+        assert models == {"researcher": "gpt-test", "writer": "gpt-writer"}
 
     def test_no_entries_does_not_create_log_file(self, tmp_path, monkeypatch):
         # 対象: main
@@ -1446,7 +981,7 @@ class TestMain:
         log_dir = tmp_path / "logs"
         fake_report = OODReport(entries=[])
         _stub_agents(monkeypatch, fake_report, "記事")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py"])
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
 
         exit_code = ood.main()
 
@@ -1464,18 +999,12 @@ class TestMain:
         _write_log_file(log_dir, "20260814_0930", [_log_entry_dict(title="v3.1.0")])
         prompts = []
 
-        def _capture_run_sync(agent, input, max_turns):
-            prompts.append(input)
-            output = (
-                OODReport(entries=[])
-                if agent.kind == "researcher"
-                else OODArticle(article_markdown="記事")
-            )
-            return type("_FakeResult", (), {"final_output": output})
+        def _capture_research(**kwargs):
+            prompts.append(kwargs["existing_log"])
+            return OODReport(entries=[])
 
-        _stub_agents(monkeypatch, OODReport(entries=[]), "記事")
-        monkeypatch.setattr(ood.Runner, "run_sync", _capture_run_sync)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent.py", "--max-log-runs", "1"])
+        monkeypatch.setattr(ood, "run_researcher", _capture_research)
+        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--max-log-runs", "1"])
 
         assert ood.main() == 0
 

@@ -26,44 +26,39 @@ CLI エージェント。
 
 ## 主な構成
 
-- `ood_news_agent.py`: エージェント本体。調査担当 Agent の構造化出力を執筆担当
-  Agent が記事へ再構成する 2 段構成である。
-  - `ReportItem` / `OODReport` / `OODArticle`: 構造化出力スキーマ。フィールドの説明は
-    英語で書き、`summary` / `change_note` も英語で出力させる。日本語化は執筆担当
-    Agent の役割である。
-  - `CATEGORIES` / `STATUSES`: `category` / `status` の照合キー（英語の識別子）。
-    `CATEGORY_DESCRIPTIONS` は各識別子の内容を執筆担当 Agent へ英語で説明する文面。
-    調査結果は執筆担当 Agent へ渡すまで英語で一貫させる（`load_log` の Markdown、
-    `report_markdown.j2`、`writer_input.j2` を含む）。記事の日本語（セクション見出しを
-    含む）は執筆担当 Agent が翻訳して生成するため、日本語の対応表は持たない。
-  - `setup_logging`: ログレベルを解決して設定する（`--log-level` / 環境変数
-    `OOD_LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。
-  - `resolve_base_date`: 調査対象期間の基準日を決定する（`--base-date` / 環境変数
-    `BASE_DATE`、未指定なら実行日）。書式不正は `ValueError` にする。
-  - `render_template`: `templates/` の Jinja2 テンプレートをレンダリングする。
-  - `build_researcher_agent`: WebSearchTool と出力スキーマを設定した調査担当 Agent を
-    構築する。
-  - `build_writer_agent`: 調査結果を記事へ再構成する執筆担当 Agent を構築する
-    （Web 検索ツールは持たせない）。
-  - `compose_article`: 調査結果を執筆担当 Agent に渡し、記事本文を得る。
-  - `resolve_log_dir` / `resolve_max_log_runs` / `log_file_path` / `list_log_files`:
-    調査ログの保存先（環境変数 `LOGDIR`）、読み込む調査回数の上限（`--max-log-runs` /
-    環境変数 `MAX_LOG_RUNS`、既定は 10、0 以下で上限なし）、調査回ごとのファイル名、
-    読み込み対象ファイルの一覧を決める。
-  - `read_log_entries` / `load_log` / `append_log`: 調査ログは調査回ごとに 1 ファイル
-    （`ood_research_log_YYYYMMDD_HHMM.json`）とし、`append_log` は既存ファイルへ追記せず
-    新しいファイルを書き出す。`load_log` は上限の範囲で複数ファイルを読み込み、各ファイルの
-    `entries` を結合して 1 つの Markdown にする。記録するのは `OODReport.entries` であり、
-    再構成後の記事ではない。
-  - `write_report_file`: 記事を `$OUTDIR/report_YYYYMMDD_HHMM.md` に保存する。
-  - `describe_api_error`: OpenAI API のエラーを、対処方法を含む英語メッセージに
-    変換する。対処方法の文言は `API_ERROR_HINTS` に集約する。
-  - `main`: CLI エントリポイント。Agent 実行は `APIError` を捕捉し、
-    スタックトレースではなく `ERROR` ログを出して終了コード 1 を返す。
-- `templates/`: Agent の指示文とユーザー入力プロンプトの Jinja2 テンプレート
-  （調査担当は `researcher_instructions.j2` / `researcher_input.j2`、調査結果の
-  箇条書き本文は `report_markdown.j2`、執筆担当は `writer_instructions.j2` /
-  `writer_input.j2`）。
+- `ood_news_agent/`: 調査・執筆の 2 段処理を実装する Python パッケージ。
+  - `__main__.py`: `python -m ood_news_agent` の実行エントリポイント。
+  - `cli.py`: 期間・ログ・出力・エラー処理を担い、調査担当と執筆担当を接続する。
+    - `setup_logging`: ログレベルを解決して設定する（`--log-level` / 環境変数
+      `OOD_LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。
+    - `resolve_base_date`: 調査対象期間の基準日を決定する（`--base-date` / 環境変数
+      `BASE_DATE`、未指定なら実行日）。書式不正は `ValueError` にする。
+    - `resolve_log_dir` / `resolve_max_log_runs` / `log_file_path` / `list_log_files`:
+      調査ログの保存先（環境変数 `LOGDIR`）、読み込む調査回数の上限（`--max-log-runs` /
+      環境変数 `MAX_LOG_RUNS`、既定は 10、0 以下で上限なし）、調査回ごとのファイル名、
+      読み込み対象ファイルの一覧を決める。
+    - `read_log_entries` / `load_log` / `append_log`: 調査ログは調査回ごとに 1 ファイル
+      （`ood_research_log_YYYYMMDD_HHMM.json`）とし、`append_log` は既存ファイルへ追記せず
+      新しいファイルを書き出す。`load_log` は上限の範囲で複数ファイルを読み込み、各ファイルの
+      `entries` を結合して 1 つの Markdown にする。記録するのは `OODReport.entries` であり、
+      再構成後の記事ではない。
+    - `write_report_file`: 記事を `$OUTDIR/report_YYYYMMDD_HHMM.md` に保存する。
+    - `describe_api_error`: OpenAI API のエラーを、対処方法を含む英語メッセージに
+      変換する。対処方法の文言は `API_ERROR_HINTS` に集約する。
+    - `main`: CLI エントリポイント。Agent 実行は `APIError` を捕捉し、
+      スタックトレースではなく `ERROR` ログを出して終了コード 1 を返す。
+  - `news_models.py`: `ReportItem` / `OODReport` の構造化出力スキーマと、`CATEGORIES` /
+    `STATUSES` の照合キー。フィールドの説明は英語で書き、`summary` / `change_note` も
+    英語で出力させる。
+  - `researcher.py`: 調査担当 Agent。Agent と入力プロンプトの構築、Web 検索を伴う実行を担う。
+  - `writer.py`: 執筆担当 Agent。`OODArticle` の出力スキーマ、`CATEGORY_DESCRIPTIONS`、
+    Agent と入力プロンプトの構築、記事再構成の実行を担う。調査結果の日本語化はこの
+    Agent の役割である。入力の事実を理解するため Web 検索ツールを持つが、検索で得た
+    新たな事実を記事へ追加しないよう指示する。
+  - `prompt_templates.py`: ルートの `templates/` にある Jinja2 テンプレートを
+    共通の規則でレンダリングする。
+- `templates/`: Agent の指示文と入力プロンプト。調査結果は執筆担当 Agent へ渡すまで
+  英語で一貫させ、記事の日本語（セクション見出しを含む）は執筆担当 Agent が生成する。
 - `docs/`: ログおよびレポートのファイル形式。
 - `tests/`: pytest テスト。
 - `pyproject.toml`: ruff と pytest の設定。
