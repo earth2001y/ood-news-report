@@ -68,13 +68,27 @@ LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
+# カテゴリと状態は、Agentの構造化出力・ログの照合キーであるため英語の識別子で持つ。
+# 調査結果は執筆担当Agentへ渡すまで英語で一貫させ、日本語化は執筆担当Agentに任せる。
 CATEGORIES = [
-    "新バージョンのリリース情報",
-    "開発ロードマップの更新・公開",
-    "セキュリティ脆弱性情報",
-    "コミュニティイベント",
-    "その他のホットトピック",
+    "new_release",
+    "roadmap",
+    "security",
+    "community_event",
+    "other_topic",
 ]
+
+# 識別子だけでは意図が伝わらないため、執筆担当Agentへの指示文で各カテゴリの内容を
+# 英語で説明する。見出しの日本語表現は執筆担当Agentが決める。
+CATEGORY_DESCRIPTIONS = {
+    "new_release": "New version releases",
+    "roadmap": "Development roadmap updates and announcements",
+    "security": "Security vulnerabilities",
+    "community_event": "Community events",
+    "other_topic": "Other topics",
+}
+
+STATUSES = ["new", "updated"]
 
 _jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATES_DIR),
@@ -200,26 +214,35 @@ def render_template(name: str, **context: object) -> str:
 
 class ReportItem(BaseModel):
     category: Literal[
-        "新バージョンのリリース情報",
-        "開発ロードマップの更新・公開",
-        "セキュリティ脆弱性情報",
-        "コミュニティイベント",
-        "その他のホットトピック",
-    ] = Field(description="5カテゴリのいずれか")
-    status: Literal["新規", "更新"] = Field(description="変更なしの項目はここに含めない")
-    title: str = Field(description="項目のタイトル(バージョン名、CVE ID、イベント名など)")
-    item_date: str = Field(description="公開日・更新日。YYYY-MM-DD形式。不明な場合は空文字")
-    url: str = Field(description="情報源のURL")
-    summary: str = Field(description="日本語での簡潔な要約")
+        "new_release",
+        "roadmap",
+        "security",
+        "community_event",
+        "other_topic",
+    ] = Field(description="One of the five categories")
+    status: Literal["new", "updated"] = Field(
+        description='"new" for items absent from the log, "updated" for reported items that '
+        "changed. Omit unchanged items entirely."
+    )
+    title: str = Field(description="Item title (version name, CVE ID, event name, etc.)")
+    item_date: str = Field(
+        description="Publication or update date in YYYY-MM-DD format. Empty string if unknown."
+    )
+    url: str = Field(description="URL of the information source")
+    summary: str = Field(description="Concise summary in English")
     change_note: str = Field(
         default="",
-        description="status が『更新』の場合、何がどう変わったかを明記。新規の場合は空文字",
+        description=(
+            'When status is "updated", state in English what changed and how. '
+            "Empty string for new items."
+        ),
     )
 
 
 class OODReport(BaseModel):
     entries: list[ReportItem] = Field(
-        description="今回『新規』または『更新』として報告した項目のみのリスト(変更なしは含めない)"
+        description='Only the items reported as "new" or "updated" this run '
+        "(exclude unchanged items)"
     )
 
 
@@ -260,6 +283,9 @@ def build_writer_agent(model: str, categories: list[str] | None = CATEGORIES) ->
     どちらの品質も安定しないため、執筆専用のAgentとして分離している。
     WebSearchToolは入力の事実を理解するための補足調査に限定し、検索で得た新たな事実は記事に
     追加しないよう指示文で制約している。
+    英語の調査結果から日本語記事への翻訳もこのAgentの責務とし、カテゴリの識別子と内容の説明
+    (CATEGORY_DESCRIPTIONS)だけを渡す。日本語の見出しを呼び出し側で固定しないのは、翻訳の判断を
+    執筆担当に一元化し、記事全体で用語と文体を揃えられるようにするためである。
 
     Args:
         model: 使用するモデル名。WebSearchTool(Responses API)対応モデルを指定する。
@@ -269,7 +295,11 @@ def build_writer_agent(model: str, categories: list[str] | None = CATEGORIES) ->
         記事執筆用に指示文と出力スキーマを設定済みのAgentインスタンス。
     """
     target_categories = categories if categories is not None else CATEGORIES
-    instructions = render_template("writer_instructions.j2", categories=target_categories)
+    instructions = render_template(
+        "writer_instructions.j2",
+        categories=target_categories,
+        category_descriptions=CATEGORY_DESCRIPTIONS,
+    )
     return Agent(
         name="OOD News Writer",
         instructions=instructions,
@@ -358,7 +388,7 @@ def load_log(log_path: Path) -> str:
                 f"{entry['summary']} - {entry['url']}"
             )
             if entry.get("change_note"):
-                lines.append(f"  変更点: {entry['change_note']}")
+                lines.append(f"  Change: {entry['change_note']}")
         lines.append("")
     return "\n".join(lines).strip()
 

@@ -19,7 +19,7 @@
 
 OpenAI Agents SDK (`openai-agents`) を使い、Open OnDemand (OSC/ondemand) の
 最新情報（新バージョンリリース、ロードマップ、セキュリティ脆弱性、
-コミュニティイベント、その他のホットトピック）を Web 検索で収集し、日本語で報告する
+コミュニティイベント、その他のトピック）を Web 検索で収集し、日本語で報告する
 CLI エージェント。
 
 詳細な使い方は `README.md` を参照すること。
@@ -28,7 +28,14 @@ CLI エージェント。
 
 - `ood_news_agent.py`: エージェント本体。調査担当 Agent の構造化出力を執筆担当
   Agent が記事へ再構成する 2 段構成である。
-  - `ReportItem` / `OODReport` / `OODArticle`: 構造化出力スキーマ。
+  - `ReportItem` / `OODReport` / `OODArticle`: 構造化出力スキーマ。フィールドの説明は
+    英語で書き、`summary` / `change_note` も英語で出力させる。日本語化は執筆担当
+    Agent の役割である。
+  - `CATEGORIES` / `STATUSES`: `category` / `status` の照合キー（英語の識別子）。
+    `CATEGORY_DESCRIPTIONS` は各識別子の内容を執筆担当 Agent へ英語で説明する文面。
+    調査結果は執筆担当 Agent へ渡すまで英語で一貫させる（`load_log` の Markdown、
+    `report_markdown.j2`、`writer_input.j2` を含む）。記事の日本語（セクション見出しを
+    含む）は執筆担当 Agent が翻訳して生成するため、日本語の対応表は持たない。
   - `setup_logging`: ログレベルを解決して設定する（`--log-level` / 環境変数
     `OOD_LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。
   - `resolve_base_date`: 調査対象期間の基準日を決定する（`--base-date` / 環境変数

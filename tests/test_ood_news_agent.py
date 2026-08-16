@@ -32,12 +32,12 @@ def _clear_optional_env(monkeypatch):
 
 def _make_entry(**overrides):
     defaults = dict(
-        category="新バージョンのリリース情報",
-        status="新規",
+        category="new_release",
+        status="new",
         title="v3.1.0",
         item_date="2026-08-01",
         url="https://example.com/v3.1.0",
-        summary="新機能が追加された",
+        summary="Adds new features.",
         change_note="",
     )
     defaults.update(overrides)
@@ -179,19 +179,43 @@ class TestReportItemCategory:
         allowed = get_args(ReportItem.model_fields["category"].annotation)
         assert list(allowed) == ood.CATEGORIES
 
-    def test_accepts_other_hot_topics(self):
-        # パターン: 追加カテゴリ「その他のホットトピック」の項目を構築できる
-        entry = _make_entry(category="その他のホットトピック")
-        assert entry.category == "その他のホットトピック"
+    def test_accepts_other_topics(self):
+        # パターン: 追加カテゴリ「その他のトピック」の項目を構築できる
+        entry = _make_entry(category="other_topic")
+        assert entry.category == "other_topic"
+
+    def test_status_literal_matches_statuses(self):
+        # 対象: ReportItem.status
+        # パターン: 許容値がSTATUSESと順序を含めて一致する（定義の二重管理による乖離の検出）
+        allowed = get_args(ReportItem.model_fields["status"].annotation)
+        assert list(allowed) == ood.STATUSES
+
+    def test_category_descriptions_cover_all_categories(self):
+        # 対象: CATEGORY_DESCRIPTIONS
+        # パターン: 全カテゴリキーに英語の説明が定義され、順序もCATEGORIESと一致する
+        assert list(ood.CATEGORY_DESCRIPTIONS) == ood.CATEGORIES
+
+    def test_category_descriptions_are_english(self):
+        # 対象: CATEGORY_DESCRIPTIONS
+        # パターン: 説明に日本語(全角)を含まない（執筆担当への入力を英語で統一する）
+        joined = "".join(ood.CATEGORY_DESCRIPTIONS.values())
+        assert joined.isascii()
 
 
 class TestRenderTemplate:
     def test_instructions_contains_all_categories(self):
         # 対象: render_template("researcher_instructions.j2")
-        # パターン: 全カテゴリ名が指示文に含まれる
+        # パターン: 全カテゴリのスキーマ値が指示文に含まれる
         rendered = ood.render_template("researcher_instructions.j2")
         for category in ood.CATEGORIES:
             assert category in rendered
+
+    def test_instructions_specifies_english_status_values(self):
+        # 対象: render_template("researcher_instructions.j2")
+        # パターン: statusに設定する英語の識別子が指示文に明示される
+        rendered = ood.render_template("researcher_instructions.j2")
+        assert 'status="new"' in rendered
+        assert 'status="updated"' in rendered
 
     def test_researcher_instructions_uses_structured_entries_only(self):
         # 対象: render_template("researcher_instructions.j2")
@@ -202,30 +226,50 @@ class TestRenderTemplate:
 
     def test_report_markdown_renders_entries_and_unchanged_categories(self):
         # 対象: render_template("report_markdown.j2")
-        # パターン: entriesから項目を分類し、空カテゴリは「変更なし」とする
+        # パターン: entriesから項目を分類し、空カテゴリは"No changes"とする(全て英語)
         rendered = ood.render_template(
             "report_markdown.j2",
             categories=ood.CATEGORIES,
-            entries=[_make_entry(status="更新", change_note="深刻度がCriticalに変更")],
+            entries=[_make_entry(status="updated", change_note="Severity raised to Critical.")],
         )
-        assert "## 新バージョンのリリース情報" in rendered
-        assert "- [更新] v3.1.0 (2026-08-01) - 新機能が追加された" in rendered
-        assert "変更点: 深刻度がCriticalに変更" in rendered
-        assert "## 開発ロードマップの更新・公開" in rendered
-        assert rendered.count("変更なし") == len(ood.CATEGORIES) - 1
+        assert "## new_release" in rendered
+        assert "- [updated] v3.1.0 (2026-08-01) - Adds new features." in rendered
+        assert "Change: Severity raised to Critical." in rendered
+        assert "## roadmap" in rendered
+        assert rendered.count("No changes") == len(ood.CATEGORIES) - 1
+
+    def test_report_markdown_contains_no_japanese(self):
+        # 対象: render_template("report_markdown.j2")
+        # パターン: 調査結果の報告文に日本語を含めない(日本語化は執筆担当の役割)
+        rendered = ood.render_template(
+            "report_markdown.j2",
+            categories=ood.CATEGORIES,
+            entries=[_make_entry(status="updated", change_note="CVSS raised to 9.1")],
+        )
+        assert rendered.isascii()
 
     def test_writer_instructions_lists_categories_in_order(self):
         # 対象: render_template("writer_instructions.j2")
-        # パターン: categoriesを渡すと全カテゴリがCATEGORIESの順で番号付きで並ぶ
-        rendered = ood.render_template("writer_instructions.j2", categories=ood.CATEGORIES)
-        positions = [rendered.index(category) for category in ood.CATEGORIES]
+        # パターン: categoriesを渡すと全カテゴリがCATEGORIESの順に番号付きで並ぶ
+        rendered = ood.render_template(
+            "writer_instructions.j2",
+            categories=ood.CATEGORIES,
+            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
+        )
+        positions = [rendered.index(f"`{category}`") for category in ood.CATEGORIES]
         assert positions == sorted(positions)
-        assert f"1. {ood.CATEGORIES[0]}" in rendered
+        assert f"1. {ood.CATEGORY_DESCRIPTIONS[ood.CATEGORIES[0]]} (`{ood.CATEGORIES[0]}`)" in (
+            rendered
+        )
 
     def test_writer_instructions_forbids_bracket_labels_and_allows_supplemental_search(self):
         # 対象: render_template("writer_instructions.j2")
         # パターン: 角括弧ラベルを禁止し、事実の補足検索を許可する
-        rendered = ood.render_template("writer_instructions.j2", categories=ood.CATEGORIES)
+        rendered = ood.render_template(
+            "writer_instructions.j2",
+            categories=ood.CATEGORIES,
+            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
+        )
         assert "角括弧ラベルは使わない" in rendered
         assert "補足情報獲得のためのWeb検索はしてよい" in rendered
         assert "事実の追加・推測・脚色は一切しない" in rendered
@@ -234,11 +278,15 @@ class TestRenderTemplate:
         # 対象: render_template("writer_instructions.j2")
         # パターン: 執筆対象として渡したカテゴリだけが指示文に含まれる
         target = [ood.CATEGORIES[0], ood.CATEGORIES[3]]
-        rendered = ood.render_template("writer_instructions.j2", categories=target)
-        assert "1. 新バージョンのリリース情報" in rendered
-        assert "2. コミュニティイベント" in rendered
-        assert "開発ロードマップの更新・公開" not in rendered
-        assert "セキュリティ脆弱性情報" not in rendered
+        rendered = ood.render_template(
+            "writer_instructions.j2",
+            categories=target,
+            category_descriptions=ood.CATEGORY_DESCRIPTIONS,
+        )
+        assert f"1. {ood.CATEGORY_DESCRIPTIONS['new_release']} (`new_release`)" in rendered
+        assert f"2. {ood.CATEGORY_DESCRIPTIONS['community_event']} (`community_event`)" in rendered
+        assert "`roadmap`" not in rendered
+        assert "`security`" not in rendered
 
     def test_writer_input_embeds_entries_and_report(self):
         # 対象: render_template("writer_input.j2")
@@ -248,13 +296,28 @@ class TestRenderTemplate:
             base_date="2026-08-13",
             window_start="2026-07-14",
             window_days=30,
-            entries=[_make_entry(status="更新", change_note="深刻度がCriticalに変更")],
+            entries=[_make_entry(status="updated", change_note="Severity raised to Critical.")],
         )
         assert "調査対象期間:" not in rendered
         assert "2026-07-14 〜 2026-08-13" not in rendered
         assert "v3.1.0" in rendered
         assert "https://example.com/v3.1.0" in rendered
-        assert "深刻度がCriticalに変更" in rendered
+        assert "Severity raised to Critical." in rendered
+
+    def test_writer_input_passes_research_result_in_english(self):
+        # 対象: render_template("writer_input.j2")
+        # パターン: 調査結果のカテゴリ・更新区分を英語の識別子のまま渡す
+        rendered = ood.render_template(
+            "writer_input.j2",
+            base_date="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            entries=[_make_entry(category="security", status="updated", change_note="CVSS 9.1")],
+        )
+        assert "Category: security" in rendered
+        assert "Status: updated" in rendered
+        assert "セキュリティ脆弱性情報" not in rendered
+        assert "更新" not in rendered
 
     def test_writer_input_marks_empty_entries(self):
         # 対象: render_template("writer_input.j2")
@@ -266,7 +329,7 @@ class TestRenderTemplate:
             window_days=30,
             entries=[],
         )
-        assert "(今回の期間内に新規・更新の項目はありませんでした)" in rendered
+        assert "(No new or updated items in this period)" in rendered
 
     def test_writer_input_marks_unknown_item_date(self):
         # 対象: render_template("writer_input.j2")
@@ -278,7 +341,7 @@ class TestRenderTemplate:
             window_days=30,
             entries=[_make_entry(item_date="")],
         )
-        assert "日付: (不明)" in rendered
+        assert "Date: (unknown)" in rendered
 
     def test_user_input_embeds_context_variables(self):
         # 対象: render_template("researcher_input.j2")
@@ -347,23 +410,25 @@ class TestLoadLog:
         log_path = tmp_path / "ood_research_log.json"
         log_path.write_text(
             '[{"datetime": "2026-08-13T09:30:00", "period": {}, '
-            '"entries": [{"category": "新バージョンのリリース情報", "status": "新規", '
+            '"entries": [{"category": "new_release", "status": "new", '
             '"title": "v3.1.0", "item_date": "2026-08-01", "url": "https://example.com/v3.1.0", '
-            '"summary": "新機能が追加された", "change_note": ""}]}, '
+            '"summary": "Adds new features.", "change_note": ""}]}, '
             '{"datetime": "2026-08-14T09:30:00", "period": {}, '
-            '"entries": [{"category": "新バージョンのリリース情報", "status": "更新", '
+            '"entries": [{"category": "new_release", "status": "updated", '
             '"title": "v3.1.0", "item_date": "2026-08-02", "url": "https://example.com/v3.1.0", '
-            '"summary": "修正が追加された", "change_note": "変更点あり"}]}]\n',
+            '"summary": "Adds a fix.", "change_note": "Patch release added."}]}]\n',
             encoding="utf-8",
         )
         rendered = ood.load_log(log_path)
-        assert rendered.startswith("### 新バージョンのリリース情報")
+        assert rendered.startswith("### new_release")
         assert rendered.count("- [") == 2
         assert "v3.1.0 (2026-08-01)" in rendered
         assert "v3.1.0 (2026-08-02)" in rendered
-        assert "変更点: 変更点あり" in rendered
+        assert "Change: Patch release added." in rendered
         assert "2026-08-13T09:30:00" not in rendered
         assert '"datetime"' not in rendered
+        # 調査担当への入力も英語で統一する
+        assert rendered.isascii()
 
 
 class TestAppendLog:
@@ -418,8 +483,8 @@ class TestAppendLog:
         # パターン: entriesの順序に関わらず、CATEGORIESの順で出力される
         log_path = tmp_path / "ood_research_log.json"
         entries = [
-            _make_entry(category="コミュニティイベント", title="GOOD Conference 2026"),
-            _make_entry(category="新バージョンのリリース情報", title="v3.1.0"),
+            _make_entry(category="community_event", title="GOOD Conference 2026"),
+            _make_entry(category="new_release", title="v3.1.0"),
         ]
         ood.append_log(
             log_path,
@@ -431,15 +496,15 @@ class TestAppendLog:
         )
         record = json.loads(log_path.read_text(encoding="utf-8"))[0]
         assert [entry["category"] for entry in record["entries"]] == [
-            "コミュニティイベント",
-            "新バージョンのリリース情報",
+            "community_event",
+            "new_release",
         ]
 
     def test_update_status_includes_change_note(self, tmp_path):
         # 対象: append_log
-        # パターン: status="更新"の項目が[更新]ラベル付きで出力される
+        # パターン: status="updated"の項目がchange_note付きで記録される
         log_path = tmp_path / "ood_research_log.json"
-        entry = _make_entry(status="更新", change_note="深刻度がCriticalに変更")
+        entry = _make_entry(status="updated", change_note="深刻度がCriticalに変更")
         ood.append_log(
             log_path,
             datetime(2026, 8, 13, 9, 30),
@@ -449,7 +514,7 @@ class TestAppendLog:
             30,
         )
         record = json.loads(log_path.read_text(encoding="utf-8"))[0]
-        assert record["entries"][0]["status"] == "更新"
+        assert record["entries"][0]["status"] == "updated"
         assert record["entries"][0]["change_note"] == "深刻度がCriticalに変更"
 
 
@@ -601,8 +666,41 @@ class TestComposeArticle:
         )
 
         assert "v3.1.0" in captured["input"]
-        assert "## 新バージョンのリリース情報" in captured["input"]
+        assert "## new_release" in captured["input"]
         assert captured["max_turns"] == 12
+
+    def test_passes_category_and_status_to_writer_in_english(self, monkeypatch):
+        # 対象: compose_article
+        # パターン: カテゴリ・更新区分を日本語化せず、英語の識別子のまま執筆担当へ渡す
+        captured = {}
+
+        class _FakeResult:
+            final_output = OODArticle(article_markdown="# 記事本文")
+
+        def _fake_run_sync(agent, input, max_turns):
+            captured["input"] = input
+            return _FakeResult()
+
+        monkeypatch.setattr(ood.Runner, "run_sync", _fake_run_sync)
+        report = OODReport(
+            entries=[
+                _make_entry(category="security", status="updated", change_note="CVSS raised to 9.1")
+            ]
+        )
+
+        ood.compose_article(
+            object(),
+            report,
+            base_date="2026-08-13",
+            window_start="2026-07-14",
+            window_days=30,
+            max_turns=12,
+        )
+
+        assert "Category: security" in captured["input"]
+        assert "Status: updated" in captured["input"]
+        assert "## security" in captured["input"]
+        assert "セキュリティ脆弱性情報" not in captured["input"]
 
 
 class TestMainNoNewInformation:

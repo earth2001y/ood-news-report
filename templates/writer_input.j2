@@ -1,20 +1,20 @@
---- 調査担当エージェントによる調査結果 ---
+--- 調査担当エージェントによる調査結果(英語) ---
 {% if entries %}{% for entry in entries %}
 [{{ loop.index }}]
-カテゴリ: {{ entry.category }}
-区分: {{ entry.status }}
-タイトル: {{ entry.title }}
-日付: {{ entry.item_date if entry.item_date else "(不明)" }}
+Category: {{ entry.category }}
+Status: {{ entry.status }}
+Title: {{ entry.title }}
+Date: {{ entry.item_date if entry.item_date else "(unknown)" }}
 URL: {{ entry.url }}
-要約: {{ entry.summary }}
-{% if entry.change_note %}変更点: {{ entry.change_note }}
+Summary: {{ entry.summary }}
+{% if entry.change_note %}Change: {{ entry.change_note }}
 {% endif %}{% endfor %}
 {% else %}
-(今回の期間内に新規・更新の項目はありませんでした)
+(No new or updated items in this period)
 {% endif %}
 --- 調査結果終わり ---
 
---- 調査結果から生成した報告文(参考) ---
+--- 調査結果から生成した報告文(参考、英語) ---
 {{ report_markdown }}
 --- 報告文終わり ---
 
