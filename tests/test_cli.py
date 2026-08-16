@@ -1,4 +1,4 @@
-"""ood_news_agent.cli のCLI・ログ・保存処理を検証する。"""
+"""app.cli のCLI・ログ・保存処理を検証する。"""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import httpx
 import pytest
 from openai import APIConnectionError, RateLimitError
 
-import ood_news_agent.cli as ood
-from ood_news_agent.news_models import OODReport
+import app.cli as ood
+from app.news_models import OODReport
 from tests.factories import make_entry as _make_entry
 
 
@@ -475,7 +475,7 @@ class TestMainNoNewInformation:
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("LOGDIR", str(tmp_path / "logs"))
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
 
         assert ood.main() == 0
 
@@ -493,7 +493,7 @@ class TestParseArguments:
             sys,
             "argv",
             [
-                "ood_news_agent",
+                "app",
                 "--model",
                 "gpt-test",
                 "--writer-model",
@@ -519,37 +519,35 @@ class TestParseArguments:
         # 対象: build_parser
         # パターン: --base-date未指定かつ環境変数なしの場合、None(=実行日扱い)になる
         monkeypatch.delenv("BASE_DATE", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().base_date is None
 
     def test_base_date_reads_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数 BASE_DATE が既定値として使われる
         monkeypatch.setenv("BASE_DATE", "2026-07-01")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().base_date == "2026-07-01"
 
     def test_cli_base_date_overrides_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数より --base-date の指定が優先される
         monkeypatch.setenv("BASE_DATE", "2026-07-01")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--base-date", "2026-07-31"])
+        monkeypatch.setattr(sys, "argv", ["app", "--base-date", "2026-07-31"])
         assert ood.build_parser().parse_args().base_date == "2026-07-31"
 
     def test_writer_model_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --writer-model未指定かつ環境変数なしの場合、Noneになる
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().writer_model is None
 
     def test_slack_webhook_url_is_not_a_cli_argument(self, monkeypatch):
         # 対象: build_parser
         # パターン: Slack Webhook URLをコマンド引数で指定すると受け付けない
         monkeypatch.setattr(
-            sys,
-            "argv",
-            ["ood_news_agent", "--slack-webhook-url", "https://hooks.slack.com/services/test"],
+            sys, "argv", ["app", "--slack-webhook-url", "https://hooks.slack.com/services/test"]
         )
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
@@ -557,14 +555,14 @@ class TestParseArguments:
     def test_outdir_is_not_a_cli_argument(self, monkeypatch):
         # 対象: build_parser
         # パターン: OUTDIR は環境変数でのみ指定し、CLI引数では受け付けない
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--outdir", "custom-output"])
+        monkeypatch.setattr(sys, "argv", ["app", "--outdir", "custom-output"])
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
 
     def test_logdir_is_not_a_cli_argument(self, monkeypatch):
         # 対象: build_parser
         # パターン: LOGDIR は環境変数でのみ指定し、CLI引数では受け付けない
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--logdir", "custom-logs"])
+        monkeypatch.setattr(sys, "argv", ["app", "--logdir", "custom-logs"])
         with pytest.raises(SystemExit):
             ood.build_parser().parse_args()
 
@@ -572,48 +570,48 @@ class TestParseArguments:
         # 対象: build_parser
         # パターン: --log-level未指定かつ環境変数なしの場合、None(=既定値扱い)になる
         monkeypatch.delenv("OOD_LOG_LEVEL", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().log_level is None
 
     def test_log_level_reads_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数 OOD_LOG_LEVEL が既定値として使われる
         monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().log_level == "DEBUG"
 
     def test_cli_log_level_overrides_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数より --log-level の指定が優先される
         monkeypatch.setenv("OOD_LOG_LEVEL", "DEBUG")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--log-level", "ERROR"])
+        monkeypatch.setattr(sys, "argv", ["app", "--log-level", "ERROR"])
         assert ood.build_parser().parse_args().log_level == "ERROR"
 
     def test_dry_run_is_enabled_by_option(self, monkeypatch):
         # 対象: build_parser
         # パターン: --dry-runを指定するとドライランが有効になる
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--dry-run"])
+        monkeypatch.setattr(sys, "argv", ["app", "--dry-run"])
         assert ood.build_parser().parse_args().dry_run is True
 
     def test_max_log_runs_defaults_to_none(self, monkeypatch):
         # 対象: build_parser
         # パターン: --max-log-runs未指定かつ環境変数なしの場合、None(=既定値扱い)になる
         monkeypatch.delenv("MAX_LOG_RUNS", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().max_log_runs is None
 
     def test_max_log_runs_reads_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数 MAX_LOG_RUNS が既定値として使われる
         monkeypatch.setenv("MAX_LOG_RUNS", "5")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         assert ood.build_parser().parse_args().max_log_runs == 5
 
     def test_cli_max_log_runs_overrides_environment_variable(self, monkeypatch):
         # 対象: build_parser
         # パターン: 環境変数より --max-log-runs の指定が優先される
         monkeypatch.setenv("MAX_LOG_RUNS", "5")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--max-log-runs", "2"])
+        monkeypatch.setattr(sys, "argv", ["app", "--max-log-runs", "2"])
         assert ood.build_parser().parse_args().max_log_runs == 2
 
     def test_resolve_log_dir_uses_default_log_directory(self, monkeypatch, tmp_path):
@@ -692,7 +690,7 @@ class TestMain:
             "post_to_slack",
             lambda *args: (_ for _ in ()).throw(AssertionError("Slack投稿が実行された")),
         )
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--dry-run"])
+        monkeypatch.setattr(sys, "argv", ["app", "--dry-run"])
 
         assert ood.main() == 0
 
@@ -717,7 +715,7 @@ class TestMain:
             captured["article_markdown"] = article_markdown
 
         monkeypatch.setattr(ood, "post_to_slack", _post_to_slack)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
 
         assert ood.main() == 0
 
@@ -741,19 +739,16 @@ class TestMain:
             return empty_report
 
         monkeypatch.setattr(ood, "run_researcher", _run_researcher)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "ood_news_agent",
-                "--base-date",
-                "2026-07-31",
-                "--window-days",
-                "10",
-                "--log-level",
-                "INFO",
-            ],
-        )
+        arguments = [
+            "app",
+            "--base-date",
+            "2026-07-31",
+            "--window-days",
+            "10",
+            "--log-level",
+            "INFO",
+        ]
+        monkeypatch.setattr(sys, "argv", arguments)
 
         assert ood.main() == 0
 
@@ -775,7 +770,7 @@ class TestMain:
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--base-date", "2020-01-01"])
+        monkeypatch.setattr(sys, "argv", ["app", "--base-date", "2020-01-01"])
 
         assert ood.main() == 0
 
@@ -806,7 +801,7 @@ class TestMain:
             raise AssertionError("基準日が不正なのにAgentが実行された")
 
         monkeypatch.setattr(ood, "run_researcher", _must_not_run)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--base-date", "2026/07/31"])
+        monkeypatch.setattr(sys, "argv", ["app", "--base-date", "2026/07/31"])
 
         assert ood.main() == 1
         err = capsys.readouterr().err
@@ -823,7 +818,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
 
         assert ood.main() == 0
 
@@ -841,7 +836,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--log-level", "INFO"])
+        monkeypatch.setattr(sys, "argv", ["app", "--log-level", "INFO"])
 
         assert ood.main() == 0
 
@@ -860,7 +855,7 @@ class TestMain:
         monkeypatch.setenv("OUTDIR", str(tmp_path / "output"))
         fake_report = OODReport(entries=[])
         _stub_agents(monkeypatch, fake_report, "# 記事本文")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--log-level", "VERBOSE"])
+        monkeypatch.setattr(sys, "argv", ["app", "--log-level", "VERBOSE"])
 
         assert ood.main() == 0
         assert "Invalid log level 'VERBOSE'" in capsys.readouterr().err
@@ -869,7 +864,7 @@ class TestMain:
         # 対象: main
         # パターン: OPENAI_API_KEY未設定時、終了コード1とERRORログを返す
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
         with caplog.at_level(logging.ERROR):
             exit_code = ood.main()
         assert exit_code == 1
@@ -886,7 +881,7 @@ class TestMain:
         log_dir = tmp_path / "logs"
         outdir = tmp_path / "output"
         monkeypatch.setattr(ood, "run_researcher", lambda **kwargs: _raise(_make_api_error()))
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
 
         exit_code = ood.main()
 
@@ -908,7 +903,7 @@ class TestMain:
         fake_report = OODReport(entries=[_make_entry()])
         monkeypatch.setattr(ood, "run_researcher", lambda **kwargs: fake_report)
         monkeypatch.setattr(ood, "compose_article", lambda *a, **kw: _raise(_make_api_error()))
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
 
         exit_code = ood.main()
 
@@ -931,7 +926,7 @@ class TestMain:
         outdir = tmp_path / "output"
         fake_report = OODReport(entries=[_make_entry()])
         _stub_agents(monkeypatch, fake_report, "# 今回のニュースレター")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
 
         exit_code = ood.main()
 
@@ -954,7 +949,7 @@ class TestMain:
         monkeypatch.delenv("OOD_WRITER_MODEL", raising=False)
         fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--model", "gpt-test"])
+        monkeypatch.setattr(sys, "argv", ["app", "--model", "gpt-test"])
 
         assert ood.main() == 0
         assert models == {"researcher": "gpt-test", "writer": "gpt-test"}
@@ -968,7 +963,7 @@ class TestMain:
         fake_report = OODReport(entries=[_make_entry()])
         models = _stub_agents(monkeypatch, fake_report, "記事")
         monkeypatch.setattr(
-            sys, "argv", ["ood_news_agent", "--model", "gpt-test", "--writer-model", "gpt-writer"]
+            sys, "argv", ["app", "--model", "gpt-test", "--writer-model", "gpt-writer"]
         )
 
         assert ood.main() == 0
@@ -983,7 +978,7 @@ class TestMain:
         log_dir = tmp_path / "logs"
         fake_report = OODReport(entries=[])
         _stub_agents(monkeypatch, fake_report, "記事")
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent"])
+        monkeypatch.setattr(sys, "argv", ["app"])
 
         exit_code = ood.main()
 
@@ -1006,7 +1001,7 @@ class TestMain:
             return OODReport(entries=[])
 
         monkeypatch.setattr(ood, "run_researcher", _capture_research)
-        monkeypatch.setattr(sys, "argv", ["ood_news_agent", "--max-log-runs", "1"])
+        monkeypatch.setattr(sys, "argv", ["app", "--max-log-runs", "1"])
 
         assert ood.main() == 0
 

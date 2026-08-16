@@ -1,4 +1,4 @@
-"""`python -m ood_news_agent` のCLIエントリポイント。"""
+"""`python -m app` のCLIエントリポイント。"""
 
 from .cli import main
 

@@ -26,8 +26,8 @@ CLI エージェント。
 
 ## 主な構成
 
-- `ood_news_agent/`: 調査・執筆の 2 段処理を実装する Python パッケージ。
-  - `__main__.py`: `python -m ood_news_agent` の実行エントリポイント。
+- `app/`: 調査・執筆の 2 段処理を実装する Python パッケージ。
+  - `__main__.py`: `python -m app` の実行エントリポイント。
   - `cli.py`: 期間・ログ・出力・エラー処理を担い、調査担当と執筆担当を接続する。
     - `setup_logging`: ログレベルを解決して設定する（`--log-level` / 環境変数
       `OOD_LOG_LEVEL`、既定は `WARNING`）。不正な値は警告して既定値で続行する。

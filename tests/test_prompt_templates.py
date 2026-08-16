@@ -2,9 +2,9 @@
 
 import json
 
-from ood_news_agent.news_models import CATEGORIES
-from ood_news_agent.prompt_templates import render_template
-from ood_news_agent.writer import CATEGORY_DESCRIPTIONS
+from app.news_models import CATEGORIES
+from app.prompt_templates import render_template
+from app.writer import CATEGORY_DESCRIPTIONS
 from tests.factories import make_entry
 
 

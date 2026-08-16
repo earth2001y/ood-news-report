@@ -1,6 +1,6 @@
 """複数のテストモジュールで共有するテストデータを生成する。"""
 
-from ood_news_agent.news_models import ReportItem
+from app.news_models import ReportItem
 
 
 def make_entry(**overrides) -> ReportItem:

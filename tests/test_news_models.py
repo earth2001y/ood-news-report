@@ -2,8 +2,8 @@
 
 from typing import get_args
 
-import ood_news_agent.news_models as news_models
-from ood_news_agent.news_models import ReportItem
+import app.news_models as news_models
+from app.news_models import ReportItem
 from tests.factories import make_entry
 
 

@@ -1,8 +1,8 @@
-"""writer.py の執筆担当Agentを検証する。"""
+"""app.writer の執筆担当Agentを検証する。"""
 
-import ood_news_agent.writer as writer
-from ood_news_agent.news_models import CATEGORIES, OODReport
-from ood_news_agent.writer import OODArticle
+import app.writer as writer
+from app.news_models import CATEGORIES, OODReport
+from app.writer import OODArticle
 from tests.factories import make_entry
 
 

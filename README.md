@@ -26,14 +26,14 @@ Web検索で収集し、日本語で報告するエージェントです。
 
 ## 処理の流れ
 
-1. **調査**: `ood_news_agent/researcher.py` の調査担当Agentが WebSearchTool で情報を収集し、
+1. **調査**: `app/researcher.py` の調査担当Agentが WebSearchTool で情報を収集し、
    過去の調査ログ(直近 `--max-log-runs` 回分を結合したもの)と照合して構造化データ
    (`OODReport`)を出力します。
 2. **ログ保存**: 調査日時・調査対象期間・`OODReport.entries` を、この調査回の
   `ood_research_log_YYYYMMDD_HHMM.json` としてJSON形式で保存します。
    既存のログファイルには追記せず、調査回ごとに新しいファイルを作ります。
    ログの内容は再構成の影響を受けません。
-3. **記事の再構成**: `ood_news_agent/writer.py` の執筆担当Agentが調査結果を受け取り、
+3. **記事の再構成**: `app/writer.py` の執筆担当Agentが調査結果を受け取り、
    箇条書きではなく地の文のニュースレター記事(`OODArticle`)に再構成します。
    この Agent は WebSearchTool で入力の事実を補足調査できますが、記事には
     調査結果に書かれた事実のみを使います。新規・更新項目がない場合は、この記事の
@@ -59,7 +59,7 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ## 実行方法
 
 ```bash
-python -m ood_news_agent
+python -m app
 ```
 
 ### コマンド引数
@@ -98,13 +98,13 @@ python -m ood_news_agent
 
 ```bash
 # 実行日が2026-08-14なら 2026-07-15 〜 2026-08-14
-python -m ood_news_agent
+python -m app
 
 # 2026-07-22 〜 2026-07-31 を調査する
-python -m ood_news_agent --base-date 2026-07-31 --window-days 10
+python -m app --base-date 2026-07-31 --window-days 10
 
 # 環境変数でも指定できる(CLIオプションが優先)
-BASE_DATE=2026-07-31 python -m ood_news_agent
+BASE_DATE=2026-07-31 python -m app
 ```
 
 基準日より後に公開・更新された情報は、調査対象期間外として報告から除外するよう
@@ -123,13 +123,13 @@ Agentに指示しています。書式が `YYYY-MM-DD` として解釈できな�
 
 ```bash
 # 直近5回分の調査ログだけを渡す
-python -m ood_news_agent --max-log-runs 5
+python -m app --max-log-runs 5
 
 # 環境変数でも指定できる(CLIオプションが優先)
-MAX_LOG_RUNS=5 python -m ood_news_agent
+MAX_LOG_RUNS=5 python -m app
 
 # 上限なし(すべての調査ログを渡す)
-python -m ood_news_agent --max-log-runs 0
+python -m app --max-log-runs 0
 ```
 
 上限を設けているのは、全履歴を結合するとAgentへの入力が際限なく膨らみ、プロンプト長の
@@ -148,10 +148,10 @@ python -m ood_news_agent --max-log-runs 0
 
 ```bash
 # 進捗を表示する
-python -m ood_news_agent --log-level INFO
+python -m app --log-level INFO
 
 # 環境変数でも指定できる(CLIオプションが優先)
-OOD_LOG_LEVEL=INFO python -m ood_news_agent
+OOD_LOG_LEVEL=INFO python -m app
 ```
 
 大文字小文字は区別しません(`info` でも可)。不正な値を指定した場合は警告を出して
@@ -161,7 +161,7 @@ OOD_LOG_LEVEL=INFO python -m ood_news_agent
 ログのメッセージは原則として英語で表示されます。
 
 ```bash
-python -m ood_news_agent --log-level INFO 2>/dev/null > report.md
+python -m app --log-level INFO 2>/dev/null > report.md
 ```
 
 ### ドライラン
@@ -171,7 +171,7 @@ python -m ood_news_agent --log-level INFO 2>/dev/null > report.md
 再構成した記事は標準出力に表示されるため、保存前に内容を確認する用途に使えます。
 
 ```bash
-python -m ood_news_agent --dry-run
+python -m app --dry-run
 ```
 
 ## 出力

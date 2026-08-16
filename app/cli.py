@@ -10,31 +10,31 @@ $LOGDIR 配下の調査ログ(調査回ごとの ood_research_log_YYYYMMDD_HHMM.
 
 使い方:
     export OPENAI_API_KEY=sk-...
-    python -m ood_news_agent
+    python -m app
 
     # ログ保存先やモデル、レポート出力先を変える場合
-    OUTDIR=./output LOGDIR=./logs python -m ood_news_agent --model gpt-5.4
+    OUTDIR=./output LOGDIR=./logs python -m app --model gpt-5.4
 
     # 記事再構成だけ別のモデルで行う場合
-    python -m ood_news_agent --writer-model gpt-5.4
+    python -m app --writer-model gpt-5.4
 
     # 調査対象期間(日数)を変える場合
-    python -m ood_news_agent --window-days 30
+    python -m app --window-days 30
 
     # 調査担当Agentへ渡す過去の調査ログを直近5回分に制限する場合
-    python -m ood_news_agent --max-log-runs 5
-    MAX_LOG_RUNS=5 python -m ood_news_agent
+    python -m app --max-log-runs 5
+    MAX_LOG_RUNS=5 python -m app
 
     # 調査対象期間の基準日を指定する場合(既定は実行日)
-    python -m ood_news_agent --base-date 2026-07-31
-    BASE_DATE=2026-07-31 python -m ood_news_agent
+    python -m app --base-date 2026-07-31
+    BASE_DATE=2026-07-31 python -m app
 
     # 進捗を表示する場合(既定のログレベルは WARNING)
-    python -m ood_news_agent --log-level INFO
-    OOD_LOG_LEVEL=INFO python -m ood_news_agent
+    python -m app --log-level INFO
+    OOD_LOG_LEVEL=INFO python -m app
 
     # APIで調査・記事再構成を行い、結果を標準出力にだけ表示する場合
-    python -m ood_news_agent --dry-run
+    python -m app --dry-run
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
-"""researcher.py の調査担当Agentを検証する。"""
+"""app.researcher の調査担当Agentを検証する。"""
 
-import ood_news_agent.researcher as researcher
-from ood_news_agent.news_models import OODReport
+import app.researcher as researcher
+from app.news_models import OODReport
 from tests.factories import make_entry
 
 

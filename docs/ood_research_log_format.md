@@ -1,6 +1,6 @@
 # 調査ログ (ood_research_log_*.json) フォーマット仕様
 
-調査ログは、[ood_news_agent/cli.py](../ood_news_agent/cli.py) が実行ごとに「新規」または「更新」
+調査ログは、[app/cli.py](../app/cli.py) が実行ごとに「新規」または「更新」
 として報告した項目を記録するJSONファイルです。**調査回ごとに1ファイル**を作成し、生成処理は
 `append_log` 関数が担います。次回実行時には `load_log` が複数のファイルを読み込んで各ファイルの
 `entries` だけを抽出し、調査回をまたいだフラットなMarkdownに変換して、Agentへの入力として
@@ -89,7 +89,7 @@ ood_research_log_<YYYYMMDD>_<HHMM>.json
 | `other_topic` | その他のトピック |
 
 記事のセクション見出しに使う日本語の文言は、執筆担当 Agent が英語の識別子から訳して
-決めます（`ood_news_agent/cli.py` に対応表は持ちません）。カテゴリの並び順と、各識別子の
+決めます（`app/cli.py` に対応表は持ちません）。カテゴリの並び順と、各識別子の
 内容を説明する英語の文面は `CATEGORIES` と `CATEGORY_DESCRIPTIONS` で管理します。
 
 ## 動作上の注意
