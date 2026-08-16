@@ -131,15 +131,15 @@ class TestSetupLogging:
         # 対象: setup_logging
         # パターン: 既定のWARNINGでは、INFOのメッセージが出力されない
         ood.setup_logging(None)
-        ood.logger.info("進捗メッセージ")
-        assert "進捗メッセージ" not in capsys.readouterr().err
+        ood.logger.info("Progress message")
+        assert "Progress message" not in capsys.readouterr().err
 
     def test_info_message_is_shown_when_info_requested(self, capsys):
         # 対象: setup_logging
         # パターン: INFO指定時、INFOのメッセージが標準エラー出力に現れる
         ood.setup_logging("INFO")
-        ood.logger.info("進捗メッセージ")
-        assert "進捗メッセージ" in capsys.readouterr().err
+        ood.logger.info("Progress message")
+        assert "Progress message" in capsys.readouterr().err
 
 
 class TestResolveBaseDate:
@@ -1024,18 +1024,18 @@ class TestDescribeApiError:
     @pytest.mark.parametrize(
         ("code", "expected"),
         [
-            ("credit_balance_exhausted", "クレジットを追加"),
-            ("insufficient_quota", "残高と上限を確認"),
-            ("invalid_api_key", "OPENAI_API_KEY が無効"),
-            ("model_not_found", "モデル名の綴り"),
+            ("credit_balance_exhausted", "Add credits"),
+            ("insufficient_quota", "balance and usage limits"),
+            ("invalid_api_key", "OPENAI_API_KEY is invalid"),
+            ("model_not_found", "Check the model name"),
         ],
     )
     def test_known_codes_include_remedy(self, code, expected):
         # 対象: describe_api_error
         # パターン: 既知のエラーコードには対処方法とAPI応答の両方が含まれる
-        message = ood.describe_api_error(_make_api_error(code=code, message="原文メッセージ"))
+        message = ood.describe_api_error(_make_api_error(code=code, message="Original API message"))
         assert expected in message
-        assert "原文メッセージ" in message
+        assert "Original API message" in message
 
     def test_unknown_code_falls_back_to_status_and_message(self):
         # 対象: describe_api_error
@@ -1051,7 +1051,7 @@ class TestDescribeApiError:
         # パターン: responseを持たない接続エラーでも例外にならずメッセージを返す
         request = httpx.Request("POST", "https://api.openai.com/v1/responses")
         message = ood.describe_api_error(APIConnectionError(request=request))
-        assert "OpenAI APIの呼び出しに失敗した" in message
+        assert "OpenAI API request failed" in message
 
 
 class TestMain:
@@ -1155,7 +1155,7 @@ class TestMain:
         # 基準日を終端に、window-days 日前が開始日になる
         assert "調査の基準日: 2026-07-31" in captured_input["text"]
         assert "2026-07-21 〜 2026-07-31" in captured_input["text"]
-        assert "2026-07-21 〜 2026-07-31" in capsys.readouterr().err
+        assert "2026-07-21 to 2026-07-31" in capsys.readouterr().err
 
     def test_base_date_does_not_change_report_filename(self, tmp_path, monkeypatch):
         # 対象: main
@@ -1242,8 +1242,8 @@ class TestMain:
         captured = capsys.readouterr()
         # 記事本文は標準出力、進捗はINFOなので既定レベルでは出力されない
         assert captured.out.strip() == "# 記事本文"
-        assert "調査中" not in captured.err
-        assert "保存しました" not in captured.err
+        assert "Researching" not in captured.err
+        assert "Saved report" not in captured.err
 
     def test_progress_is_shown_when_info_level_requested(self, tmp_path, monkeypatch, capsys):
         # 対象: main
@@ -1267,10 +1267,10 @@ class TestMain:
 
         captured = capsys.readouterr()
         assert captured.out.strip() == "# 記事本文"
-        assert "調査中" in captured.err
-        assert "再構成中" in captured.err
-        assert "1 件を保存しました" in captured.err
-        assert "レポートを" in captured.err
+        assert "Researching the latest Open OnDemand news" in captured.err
+        assert "Composing a newsletter article" in captured.err
+        assert "Saved 1 entries" in captured.err
+        assert "Saved report to" in captured.err
 
     def test_invalid_log_level_warns_and_continues(self, tmp_path, monkeypatch, capsys):
         # 対象: main
@@ -1291,7 +1291,7 @@ class TestMain:
         )
 
         assert ood.main() == 0
-        assert "ログレベル 'VERBOSE' は不正です" in capsys.readouterr().err
+        assert "Invalid log level 'VERBOSE'" in capsys.readouterr().err
 
     def test_missing_api_key_returns_error(self, monkeypatch, capsys, caplog):
         # 対象: main
@@ -1325,8 +1325,8 @@ class TestMain:
 
         assert exit_code == 1
         err = capsys.readouterr().err
-        assert "調査に失敗しました" in err
-        assert "クレジットを追加" in err
+        assert "Research failed" in err
+        assert "Add credits" in err
         assert _written_log_files(log_dir) == []
         assert not outdir.exists()
 
@@ -1352,7 +1352,7 @@ class TestMain:
         exit_code = ood.main()
 
         assert exit_code == 1
-        assert "記事の再構成に失敗しました" in capsys.readouterr().err
+        assert "Article composition failed" in capsys.readouterr().err
         # 調査結果は失われない
         log_files = _written_log_files(log_dir)
         assert len(log_files) == 1

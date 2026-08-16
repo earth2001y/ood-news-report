@@ -56,7 +56,7 @@ CLI エージェント。
     `entries` を結合して 1 つの Markdown にする。記録するのは `OODReport.entries` であり、
     再構成後の記事ではない。
   - `write_report_file`: 記事を `$OUTDIR/report_YYYYMMDD_HHMM.md` に保存する。
-  - `describe_api_error`: OpenAI API のエラーを、対処方法を含む日本語メッセージに
+  - `describe_api_error`: OpenAI API のエラーを、対処方法を含む英語メッセージに
     変換する。対処方法の文言は `API_ERROR_HINTS` に集約する。
   - `main`: CLI エントリポイント。Agent 実行は `APIError` を捕捉し、
     スタックトレースではなく `ERROR` ログを出して終了コード 1 を返す。

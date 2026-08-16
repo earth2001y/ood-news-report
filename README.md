@@ -158,6 +158,7 @@ OOD_LOG_LEVEL=INFO python ood_news_agent.py
 `WARNING` で実行を続けます(ログ設定のタイポで調査そのものを止めないため)。
 
 ログはすべて標準エラー出力に出るため、記事本文だけを取り出すことができます。
+ログのメッセージは原則として英語で表示されます。
 
 ```bash
 python ood_news_agent.py --log-level INFO 2>/dev/null > report.md

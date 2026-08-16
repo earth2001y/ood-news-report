@@ -131,7 +131,7 @@ def setup_logging(level_name: str | None = DEFAULT_LOG_LEVEL) -> int:
     logging.basicConfig(level=resolved, format="%(levelname)s: %(message)s", force=True)
     if invalid:
         logger.warning(
-            "ログレベル %r は不正です。%s を使用します。指定できる値: %s",
+            "Invalid log level %r; using %s. Valid values: %s",
             level_name,
             DEFAULT_LOG_LEVEL,
             ", ".join(LOG_LEVELS),
@@ -165,9 +165,7 @@ def resolve_base_date(base_date: str | None, run_at: datetime) -> date:
     try:
         return datetime.strptime(base_date, BASE_DATE_FORMAT).date()
     except ValueError as e:
-        raise ValueError(
-            f"基準日 {base_date!r} を解釈できません。YYYY-MM-DD 形式で指定してください。"
-        ) from e
+        raise ValueError(f"Could not parse base date {base_date!r}. Use YYYY-MM-DD format.") from e
 
 
 def resolve_log_dir() -> Path:
@@ -250,7 +248,7 @@ def list_log_files(log_dir: Path, max_log_runs: int) -> list[Path]:
     if max_log_runs > 0 and len(paths) > max_log_runs:
         skipped = len(paths) - max_log_runs
         logger.info(
-            "調査ログ %d 件のうち、新しい %d 件のみを読み込みます(古い %d 件は除外)",
+            "Found %d research logs; loading the newest %d and excluding %d older logs",
             len(paths),
             max_log_runs,
             skipped,
@@ -591,7 +589,7 @@ def post_to_slack(webhook_url: str, article_markdown: str) -> None:
     )
     with urlopen(request, timeout=SLACK_TIMEOUT_SECONDS) as response:
         if response.status != 200:
-            raise RuntimeError(f"Slack WebhookがHTTP {response.status}を返しました")
+            raise RuntimeError(f"Slack webhook returned HTTP {response.status}")
 
 
 def markdown_to_slack_mrkdwn(markdown: str) -> str:
@@ -684,25 +682,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 API_ERROR_HINTS = {
     "credit_balance_exhausted": (
-        "OpenAI APIの残高が不足している。"
-        "https://platform.openai.com/settings/organization/billing/ でクレジットを追加すること。"
+        "The OpenAI API credit balance is depleted. Add credits at "
+        "https://platform.openai.com/settings/organization/billing/."
     ),
     "insufficient_quota": (
-        "OpenAI APIの利用可能枠を超えている。"
-        "https://platform.openai.com/settings/organization/billing/ で残高と上限を確認すること。"
+        "The OpenAI API quota has been exceeded. Check the balance and usage limits at "
+        "https://platform.openai.com/settings/organization/billing/."
     ),
     "invalid_api_key": (
-        "OPENAI_API_KEY が無効である。キーの値が正しいか、失効していないかを確認すること。"
+        "OPENAI_API_KEY is invalid. Check that the key is correct and has not been revoked."
     ),
     "model_not_found": (
-        "指定したモデルが利用できない。モデル名の綴りと、"
-        "そのモデルがアカウントで利用可能かを確認すること。--model で指定し直すこと。"
+        "The requested model is unavailable. Check the model name and confirm that your account "
+        "can access it, or specify another model with --model."
     ),
 }
 
 
 def describe_api_error(error: APIError) -> str:
-    """OpenAI APIのエラーを、対処方法を含む日本語1行メッセージに変換する。
+    """OpenAI APIのエラーを、対処方法を含む英語メッセージに変換する。
 
     [実装理由] Agent実行が失敗したときにスタックトレースをそのまま見せると、原因(残高不足、キーの
     誤り、モデル名の誤りなど)と対処方法が読み取れない。エラー種別ごとの対処方法をこの関数に集約し、
@@ -715,14 +713,14 @@ def describe_api_error(error: APIError) -> str:
         error: openai パッケージが送出した APIError(またはそのサブクラス)。
 
     Returns:
-        原因と対処方法を含む日本語のメッセージ。
+        原因と対処方法を含む英語のメッセージ。
     """
     hint = API_ERROR_HINTS.get(error.code or "")
     if hint is None:
         status = getattr(getattr(error, "response", None), "status_code", None)
         status_part = f"(HTTP {status}) " if status else ""
-        return f"OpenAI APIの呼び出しに失敗した。{status_part}{error.message}"
-    return f"{hint}\n(APIからの応答: {error.message})"
+        return f"OpenAI API request failed. {status_part}{error.message}"
+    return f"{hint}\n(API response: {error.message})"
 
 
 def run_researcher_agent(
@@ -746,12 +744,12 @@ def run_researcher_agent(
         window_days=window_days,
         existing_log=existing_log,
     )
-    period = f"{window_start.isoformat()} 〜 {base_date.isoformat()}"
-    logger.info("Open OnDemand の最新情報を調査中... (対象期間: %s)", period)
+    period = f"{window_start.isoformat()} to {base_date.isoformat()}"
+    logger.info("Researching the latest Open OnDemand news... (period: %s)", period)
     try:
         result = Runner.run_sync(researcher, input=prompt, max_turns=args.max_turns)
     except APIError as e:
-        logger.error("調査に失敗しました。%s", describe_api_error(e))
+        logger.error("Research failed. %s", describe_api_error(e))
         return None
     return result.final_output
 
@@ -772,11 +770,11 @@ def persist_report(
     if not webhook_url:
         return path
 
-    logger.info("レポートをSlackへ投稿中...")
+    logger.info("Posting report to Slack...")
     try:
         post_to_slack(webhook_url, article_markdown)
     except (HTTPError, URLError, RuntimeError, TimeoutError) as e:
-        logger.error("Slackへの投稿に失敗しました: %s", e)
+        logger.error("Failed to post report to Slack: %s", e)
         return None
     return path
 
@@ -795,7 +793,7 @@ def run_writer_agent(
     [実装理由] 執筆担当Agentの作成・実行と、ファイル保存・Slack投稿を分離することで、
     Agent実行の失敗と副作用を伴う永続化処理を独立して扱えるようにしている。
     """
-    logger.info("調査結果をニュースレター記事に再構成中...")
+    logger.info("Composing a newsletter article from the research results...")
     categories = [
         category
         for category in CATEGORIES
@@ -816,9 +814,9 @@ def run_writer_agent(
         )
     except APIError as e:
         logger.error(
-            "記事の再構成に失敗しました。%s\n"
-            "(調査結果は %s に保存済みです。再実行すると、保存済みの項目は"
-            "「変更なし」と判定され再報告されない点に注意してください)",
+            "Article composition failed. %s\n"
+            "(The research results have already been saved to %s. On rerun, saved items may be "
+            "classified as unchanged and omitted.)",
             describe_api_error(e),
             log_path,
         )
@@ -841,7 +839,7 @@ def finalize_report(
 
     if args.dry_run:
         print(article_markdown)
-        logger.info("ドライランのため、調査ログ保存・レポート保存・Slack投稿を行いません")
+        logger.info("Dry run: skipping research log, report, and Slack delivery")
         return article_markdown, None
 
     path = persist_report(
@@ -853,8 +851,8 @@ def finalize_report(
         return None
 
     print(article_markdown)
-    logger.info("ログファイル %s に %d 件を保存しました", log_path, len(report.entries))
-    logger.info("レポートを %s に保存しました", path)
+    logger.info("Saved %d entries to research log %s", len(report.entries), log_path)
+    logger.info("Saved report to %s", path)
     return article_markdown, path
 
 
@@ -872,8 +870,7 @@ def main() -> int:
 
     if not os.environ.get("OPENAI_API_KEY"):
         logger.error(
-            "環境変数 OPENAI_API_KEY が設定されていません。"
-            "export OPENAI_API_KEY=sk-... を実行するか、.env ファイルに設定してください。"
+            "OPENAI_API_KEY is not set. Run export OPENAI_API_KEY=sk-... or add it to .env."
         )
         return 1
 
@@ -910,7 +907,7 @@ def main() -> int:
         )
 
     if not report.entries:
-        logger.info("新しい情報がないため、ニュースレター記事は作成しません")
+        logger.info("No new information found; skipping newsletter article generation")
         return 0
 
     writer_model = args.writer_model or args.model
